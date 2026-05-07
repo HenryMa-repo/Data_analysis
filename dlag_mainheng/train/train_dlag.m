@@ -78,7 +78,7 @@ end
 % will be analyzed in parallel using Matlab's parfor construct. 
 % If you have access to multiple cores, this provides significant speedup.
 parallelize = true;
-numWorkers = 2;      % Adjust this to your computer's specs
+numWorkers = 6;      % Adjust this to your computer's specs
 
 %% =======================
 % 1a) Fitting a DLAG model
@@ -99,7 +99,7 @@ method = 'dlag';          % For now this is the only option, but that may change
 covType = 'rbf';          % Type of GP covariance kernel ('rbf' or 'sg')
 rGroups = [1 2];          % For performance evaluation, we can regress group 2's activity with group 1
 startTau = 2*binWidth;    % Initial timescale, in the same units of time as binWidth
-segLength = 25;           % Largest trial segment length, in no. of time points
+segLength = 20;           % Largest trial segment length, in no. of time points
 init_method = 'static';   % Initialize DLAG with fitted pCCA parameters
 learnDelays = true;       % Set to false if you want to fix delays at their initial value
 
