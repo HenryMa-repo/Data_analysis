@@ -329,11 +329,15 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
     % ---------------------------------------------------------------------
     save(fullfile(outDir, 'latent_condition_analysis_results.mat'), 'Results', '-v7.3');
 end
-
 % =========================================================================
 % Build per-trial factor labels from condition_full and seqEst.trialId
+% Optional includeStimDir=true also builds effective stimulus direction labels.
 % =========================================================================
-function trialMeta = build_trial_metadata(condition_full, seqEst)
+function trialMeta = build_trial_metadata(condition_full, seqEst, includeStimDir)
+
+    if nargin < 3 || isempty(includeStimDir)
+        includeStimDir = false;
+    end
 
     Ntr = numel(seqEst);
 
@@ -343,24 +347,48 @@ function trialMeta = build_trial_metadata(condition_full, seqEst)
         trialId = (1:Ntr)';
     end
 
-    stimName    = strings(Ntr, 1);
-    sizeValue   = nan(Ntr, 1);
-    contrastRaw = nan(Ntr, 1);
+    stimName     = strings(Ntr, 1);
+    sizeValue    = nan(Ntr, 1);
+    contrastRaw  = nan(Ntr, 1);
+    effectiveDir = nan(Ntr, 1);
 
     for k = 1:numel(condition_full)
         if ~isfield(condition_full(k), 'trial_indices')
             error('condition_full(%d) is missing field trial_indices.', k);
         end
+
         theseIds = condition_full(k).trial_indices(:);
         tf = ismember(trialId, theseIds);
-        stimName(tf) = lower(string(condition_full(k).stim_name));
+
+        currStim = lower(string(condition_full(k).stim_name));
+        stimName(tf) = currStim;
         sizeValue(tf) = condition_full(k).size;
         contrastRaw(tf) = condition_full(k).contrast;
+
+        if includeStimDir
+            if strcmp(currStim, "plaid")
+                if ~isfield(condition_full(k), 'plaid_dir')
+                    error('condition_full(%d) is plaid but missing field plaid_dir.', k);
+                end
+                effectiveDir(tf) = condition_full(k).plaid_dir;
+            elseif strcmp(currStim, "grating")
+                if ~isfield(condition_full(k), 'grating_dir')
+                    error('condition_full(%d) is grating but missing field grating_dir.', k);
+                end
+                effectiveDir(tf) = condition_full(k).grating_dir;
+            else
+                error('Unsupported stim_name found: %s', char(currStim));
+            end
+        end
     end
 
     assigned = (stimName ~= "") & ~isnan(sizeValue) & ~isnan(contrastRaw);
+    if includeStimDir
+        assigned = assigned & ~isnan(effectiveDir);
+    end
+
     if any(~assigned)
-        warning('Some seqEst trials could not be assigned to any condition_full entry. They will be excluded.');
+        warning('Some seqEst trials could not be assigned completely. They will be excluded.');
     end
 
     % Stim order: grating first, plaid second when both exist
@@ -387,6 +415,7 @@ function trialMeta = build_trial_metadata(condition_full, seqEst)
     if numel(sizeVals) ~= 2
         error('Expected exactly 2 size values.');
     end
+
     sizeCode = nan(Ntr, 1);
     sizeCode(sizeValue == sizeVals(1)) = 1;
     sizeCode(sizeValue == sizeVals(2)) = 2;
@@ -394,19 +423,43 @@ function trialMeta = build_trial_metadata(condition_full, seqEst)
     % Contrast mapping: low/high within each stim_name separately
     contrastCode = nan(Ntr, 1);
     contrastValuesByStim = struct();
+
     for s = 1:2
         idx = assigned & (stimCode == s);
         cvals = unique(contrastRaw(idx));
         cvals = sort(cvals(:)');
         if numel(cvals) ~= 2
-            error('Stim %s does not have exactly 2 contrast levels.', stimLabels(s));
+            error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
         end
+
         contrastCode(idx & contrastRaw == cvals(1)) = 1;
         contrastCode(idx & contrastRaw == cvals(2)) = 2;
         contrastValuesByStim.(char(stimLabels(s))) = cvals;
     end
 
+    stimDirCode = nan(Ntr, 1);
+    stimDirLabels = {};
+    stimDirValues = [];
+
+    if includeStimDir
+        dirVals = unique(effectiveDir(assigned));
+        dirVals = sort(dirVals(:)');
+
+        if numel(dirVals) ~= 2
+            error('Expected exactly 2 effective stimulus direction values.');
+        end
+
+        stimDirLabels = {'stim_dir1', 'stim_dir2'};
+        tol = max(1e-10, 1e-8 * max(1, max(abs(dirVals))));
+        stimDirCode(abs(effectiveDir - dirVals(1)) < tol) = 1;
+        stimDirCode(abs(effectiveDir - dirVals(2)) < tol) = 2;
+        stimDirValues = dirVals;
+    end
+
     valid = assigned & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode);
+    if includeStimDir
+        valid = valid & isfinite(stimDirCode);
+    end
 
     condIdx = nan(Ntr, 1);
     condIdx(valid) = (stimCode(valid)-1) * 4 + (sizeCode(valid)-1) * 2 + contrastCode(valid);
@@ -438,14 +491,23 @@ function trialMeta = build_trial_metadata(condition_full, seqEst)
     trialMeta.stimName = cellstr(stimName);
     trialMeta.stimCode = stimCode;
     trialMeta.stimLabels = cellstr(stimLabels);
+
     trialMeta.sizeValue = sizeValue;
     trialMeta.sizeCode = sizeCode;
     trialMeta.sizeValues = sizeVals;
+
     trialMeta.contrastRaw = contrastRaw;
     trialMeta.contrastCode = contrastCode;
     trialMeta.contrastValuesByStim = contrastValuesByStim;
+
+    trialMeta.effectiveDirValue = effectiveDir;
+    trialMeta.stimDirCode = stimDirCode;
+    trialMeta.stimDirLabels = stimDirLabels;
+    trialMeta.stimDirValues = stimDirValues;
+
     trialMeta.valid = valid;
     trialMeta.condIdx = condIdx;
+
     trialMeta.condLabels = condLabels;
     trialMeta.condShortLabels = condShortLabels;
     trialMeta.barX = barX;
@@ -474,50 +536,53 @@ function acrossCategory = classify_across_latents(acrossDelay, ambiguousIdxs, xD
         end
     end
 end
-
 % =========================================================================
 % Build one latent info struct for titles and labels
 % =========================================================================
 function latentInfo = make_latent_info(groupIdx, localIdx, xDim_across, acrossCategory, dslLogical, dslLogicalByStimDir, dslLogicalByStimNameDir, dslLogicalByCondition)
+
     latentInfo = struct();
+    latentInfo.groupIndex = groupIdx;
 
     if localIdx <= xDim_across
         latentInfo.latentType = 'across';
         latentInfo.acrossIndex = localIdx;
         latentInfo.withinIndex = [];
         latentInfo.acrossCategory = acrossCategory{localIdx};
-        latentLine = sprintf('Across latent %d (%s)', localIdx, acrossCategory{localIdx});
+        latentInfo.latentLine = sprintf('Across latent %d (%s)', localIdx, acrossCategory{localIdx});
     else
         latentInfo.latentType = 'within';
         latentInfo.acrossIndex = [];
         latentInfo.withinIndex = localIdx - xDim_across;
         latentInfo.acrossCategory = '';
-        latentLine = sprintf('Within latent %d', latentInfo.withinIndex);
+        latentInfo.latentLine = sprintf('Within latent %d', latentInfo.withinIndex);
     end
 
-    dslLabel = dsl_keep_remove_label(dslLogical, 'alltrials');
-    dslByStimDirLabel = dsl_keep_remove_label(dslLogicalByStimDir, 'bystimdir');
-    dslByStimNameDirLabel = dsl_keep_remove_label(dslLogicalByStimNameDir, 'bystimnamedir');
-    dslByConditionLabel = dsl_keep_remove_label(dslLogicalByCondition, 'bycondition');
+    latentInfo.dslLabel = dsl_keep_remove_label(dslLogical, 'alltrials');
+    latentInfo.dslByStimDirLabel = dsl_keep_remove_label(dslLogicalByStimDir, 'bystimdir');
+    latentInfo.dslByStimNameDirLabel = dsl_keep_remove_label(dslLogicalByStimNameDir, 'bystimnamedir');
+    latentInfo.dslByConditionLabel = dsl_keep_remove_label(dslLogicalByCondition, 'bycondition');
 
-    latentInfo.dslLabel = dslLabel;
-    latentInfo.dslByStimDirLabel = dslByStimDirLabel;
-    latentInfo.dslByStimNameDirLabel = dslByStimNameDirLabel;
-    latentInfo.dslByConditionLabel = dslByConditionLabel;
     latentInfo.titleLines = { ...
         sprintf('Group %d', groupIdx), ...
-        latentLine, ...
-        dslLabel, ...
-        dslByStimDirLabel, ...
-        dslByStimNameDirLabel, ...
-        dslByConditionLabel};
+        latentInfo.latentLine, ...
+        latentInfo.dslLabel, ...
+        latentInfo.dslByStimDirLabel, ...
+        latentInfo.dslByStimNameDirLabel, ...
+        latentInfo.dslByConditionLabel};
 end
-
 % =========================================================================
 % Compute condition-wise time-course means/SEMs and trial-response means/SEMs
+% Optional subsetMask lets split-by-dir analysis reuse the same helper.
 % =========================================================================
 function [meanTime, semTime, respMean, respSEM, respN, condTrialSeqIdx, condTrialIds] = ...
-    compute_condition_averages(X, trialMean, condIdx, trialIds, nCond)
+    compute_condition_averages(X, trialMean, condIdx, trialIds, subsetMask, nCond)
+
+    if nargin < 6
+        nCond = subsetMask;
+        subsetMask = true(size(condIdx));
+    end
+    subsetMask = logical(subsetMask(:));
 
     T = size(X, 2);
 
@@ -531,7 +596,7 @@ function [meanTime, semTime, respMean, respSEM, respN, condTrialSeqIdx, condTria
     condTrialIds    = cell(nCond, 1);
 
     for c = 1:nCond
-        idx = find(condIdx == c);
+        idx = find(subsetMask & (condIdx == c));
         condTrialSeqIdx{c} = idx;
         condTrialIds{c} = trialIds(idx);
 
@@ -558,13 +623,19 @@ function [meanTime, semTime, respMean, respSEM, respN, condTrialSeqIdx, condTria
         respN(c) = numel(yc);
     end
 end
-
 % =========================================================================
 % Run full 3-way ANOVA
+% Optional subsetMask lets split-by-dir analysis reuse the same helper.
 % =========================================================================
-function anovaRes = run_threeway_anova(y, stimCode, sizeCode, contrastCode, alpha)
+function anovaRes = run_threeway_anova(y, stimCode, sizeCode, contrastCode, subsetMask, alpha)
 
-    valid = isfinite(y) & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode);
+    if nargin < 6
+        alpha = subsetMask;
+        subsetMask = true(size(y));
+    end
+    subsetMask = logical(subsetMask(:));
+
+    valid = subsetMask & isfinite(y) & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode);
 
     anovaRes = struct();
     anovaRes.p = nan(1, 7);
@@ -593,16 +664,21 @@ function anovaRes = run_threeway_anova(y, stimCode, sizeCode, contrastCode, alph
         anovaRes.stats = stats;
         anovaRes.terms = terms;
     catch
-        % Leave as NaN / empty if ANOVA fails
+        % Leave outputs as NaN / empty if ANOVA fails
     end
 end
-
 % =========================================================================
 % Compute marginal means/SEMs for the 3 main effects
+% Optional subsetMask lets split-by-dir analysis reuse the same helper.
 % =========================================================================
-function mainEffects = compute_main_effect_summaries(y, trialMeta, pVec)
+function mainEffects = compute_main_effect_summaries(y, trialMeta, pVec, subsetMask)
 
-    valid = trialMeta.valid & isfinite(y);
+    if nargin < 4
+        subsetMask = true(size(y));
+    end
+    subsetMask = logical(subsetMask(:));
+
+    valid = subsetMask & trialMeta.valid & isfinite(y);
 
     mainEffects = struct([]);
 
@@ -639,14 +715,20 @@ function mainEffects = compute_main_effect_summaries(y, trialMeta, pVec)
         compute_sem(y(valid & trialMeta.contrastCode == 2))];
     mainEffects(3).p = pick_p(pVec, 3);
 end
-
 % =========================================================================
 % Compute all simple effects for the 2x2x2 design
-% Each test compares the 2 levels of one factor while holding the other two fixed
+% Each test compares the 2 levels of one factor while holding the other two fixed.
+% Optional subsetMask lets split-by-dir analysis reuse the same helper.
 % =========================================================================
-function simpleEffects = compute_simple_effects(y, trialMeta, alpha)
+function simpleEffects = compute_simple_effects(y, trialMeta, subsetMask, alpha)
 
-    valid = trialMeta.valid & isfinite(y);
+    if nargin < 4
+        alpha = subsetMask;
+        subsetMask = true(size(y));
+    end
+    subsetMask = logical(subsetMask(:));
+
+    valid = subsetMask & trialMeta.valid & isfinite(y);
 
     template = struct( ...
         'factor', '', ...
@@ -1305,20 +1387,20 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
     timeDir  = fullfile(outDir, 'timecourses');
     anovaDir = fullfile(outDir, 'anova');
 
-    dirsplit_ensure_dir(outDir);
-    dirsplit_ensure_dir(timeDir);
-    dirsplit_ensure_dir(anovaDir);
+    ensure_dir(outDir);
+    ensure_dir(timeDir);
+    ensure_dir(anovaDir);
 
     % ---------------------------------------------------------------------
     % Trial metadata
     % ---------------------------------------------------------------------
-    trialMeta = dirsplit_build_trial_metadata(condition_full, seqEst);
+    trialMeta = build_trial_metadata(condition_full, seqEst, true);
 
     % ---------------------------------------------------------------------
     % Across-latent category labels
     % ---------------------------------------------------------------------
     acrossDelay    = gp_params.delays;
-    acrossCategory = dirsplit_classify_across_latents(acrossDelay, ambiguousIdxs, xDim_across);
+    acrossCategory = classify_across_latents(acrossDelay, ambiguousIdxs, xDim_across);
 
     % ---------------------------------------------------------------------
     % Global latent row indexing in seqEst(n).xsm
@@ -1383,7 +1465,7 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
 
             trialMean = mean(X, 2);
 
-            latentInfo = dirsplit_make_latent_info( ...
+            latentInfo = make_latent_info( ...
                 g, l, xDim_across, acrossCategory, ...
                 DSL.logical{g}(l), DSL.logical_bystimdir{g}(l), ...
                 DSL.logical_bystimnamedir{g}(l), DSL.logical_bycondition{g}(l));
@@ -1411,21 +1493,21 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
                 subsetMask = trialMeta.valid & (trialMeta.stimDirCode == d);
 
                 [meanTime, semTime, respMean, respSEM, respN, condTrialSeqIdx, condTrialIds] = ...
-                    dirsplit_compute_condition_averages( ...
+                    compute_condition_averages( ...
                         X, trialMean, trialMeta.condIdx, trialMeta.trialId, subsetMask, 8);
 
-                anovaRes = dirsplit_run_threeway_anova( ...
+                anovaRes = run_threeway_anova( ...
                     trialMean, trialMeta.stimCode, trialMeta.sizeCode, trialMeta.contrastCode, subsetMask, alpha);
 
-                mainEffects = dirsplit_compute_main_effect_summaries( ...
+                mainEffects = compute_main_effect_summaries( ...
                     trialMean, trialMeta, anovaRes.p, subsetMask);
 
-                simpleEffects = dirsplit_compute_simple_effects( ...
+                simpleEffects = compute_simple_effects( ...
                     trialMean, trialMeta, subsetMask, alpha);
 
                 dirTitle = sprintf('%s = %s', ...
                     trialMeta.stimDirLabels{d}, ...
-                    dirsplit_format_value(trialMeta.stimDirValues(d)));
+                    format_value(trialMeta.stimDirValues(d)));
 
                 titleLines = { ...
                     sprintf('Group %d | %s', g, dirTitle), ...
@@ -1534,467 +1616,6 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
 end
 
 % =========================================================================
-% Build per-trial metadata including effective stimulus direction
-% =========================================================================
-function trialMeta = dirsplit_build_trial_metadata(condition_full, seqEst)
-
-    Ntr = numel(seqEst);
-
-    if isfield(seqEst, 'trialId')
-        trialId = [seqEst.trialId]';
-    else
-        trialId = (1:Ntr)';
-    end
-
-    stimName       = strings(Ntr, 1);
-    sizeValue      = nan(Ntr, 1);
-    contrastRaw    = nan(Ntr, 1);
-    effectiveDir   = nan(Ntr, 1);
-
-    for k = 1:numel(condition_full)
-        if ~isfield(condition_full(k), 'trial_indices')
-            error('condition_full(%d) is missing field trial_indices.', k);
-        end
-
-        theseIds = condition_full(k).trial_indices(:);
-        tf = ismember(trialId, theseIds);
-
-        currStim = lower(string(condition_full(k).stim_name));
-
-        stimName(tf)    = currStim;
-        sizeValue(tf)   = condition_full(k).size;
-        contrastRaw(tf) = condition_full(k).contrast;
-
-        if strcmp(currStim, "plaid")
-            if ~isfield(condition_full(k), 'plaid_dir')
-                error('condition_full(%d) is plaid but missing field plaid_dir.', k);
-            end
-            effectiveDir(tf) = condition_full(k).plaid_dir;
-        elseif strcmp(currStim, "grating")
-            if ~isfield(condition_full(k), 'grating_dir')
-                error('condition_full(%d) is grating but missing field grating_dir.', k);
-            end
-            effectiveDir(tf) = condition_full(k).grating_dir;
-        else
-            error('Unsupported stim_name found: %s', char(currStim));
-        end
-    end
-
-    assigned = (stimName ~= "") & ~isnan(sizeValue) & ~isnan(contrastRaw) & ~isnan(effectiveDir);
-    if any(~assigned)
-        warning('Some seqEst trials could not be assigned completely. They will be excluded.');
-    end
-
-    % Stim labels
-    allStim = unique(stimName(assigned), 'stable');
-    allStim = lower(allStim);
-
-    if all(ismember(["grating","plaid"], allStim))
-        stimLabels = ["grating","plaid"];
-    else
-        if numel(allStim) ~= 2
-            error('Expected exactly 2 stim levels after assignment.');
-        end
-        stimLabels = allStim(:)';
-    end
-
-    stimCode = nan(Ntr, 1);
-    for s = 1:2
-        stimCode(stimName == stimLabels(s)) = s;
-    end
-
-    % Size mapping
-    sizeVals = unique(sizeValue(assigned));
-    sizeVals = sort(sizeVals(:)');
-    if numel(sizeVals) ~= 2
-        error('Expected exactly 2 size values.');
-    end
-
-    sizeCode = nan(Ntr, 1);
-    sizeCode(sizeValue == sizeVals(1)) = 1;
-    sizeCode(sizeValue == sizeVals(2)) = 2;
-
-    % Contrast mapping within each stim_name
-    contrastCode = nan(Ntr, 1);
-    contrastValuesByStim = struct();
-
-    for s = 1:2
-        idx = assigned & (stimCode == s);
-        cvals = unique(contrastRaw(idx));
-        cvals = sort(cvals(:)');
-        if numel(cvals) ~= 2
-            error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
-        end
-
-        contrastCode(idx & contrastRaw == cvals(1)) = 1;
-        contrastCode(idx & contrastRaw == cvals(2)) = 2;
-        contrastValuesByStim.(char(stimLabels(s))) = cvals;
-    end
-
-    % Effective stimulus direction mapping
-    dirVals = unique(effectiveDir(assigned));
-    dirVals = sort(dirVals(:)');
-
-    if numel(dirVals) ~= 2
-        error('Expected exactly 2 effective stimulus direction values.');
-    end
-
-    stimDirLabels = {'stim_dir1', 'stim_dir2'};
-    stimDirCode = nan(Ntr, 1);
-
-    tol = max(1e-10, 1e-8 * max(1, max(abs(dirVals))));
-    stimDirCode(abs(effectiveDir - dirVals(1)) < tol) = 1;
-    stimDirCode(abs(effectiveDir - dirVals(2)) < tol) = 2;
-
-    valid = assigned & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode) & isfinite(stimDirCode);
-
-    condIdx = nan(Ntr, 1);
-    condIdx(valid) = (stimCode(valid)-1) * 4 + (sizeCode(valid)-1) * 2 + contrastCode(valid);
-
-    condLabels = { ...
-        'grating-small-low'
-        'grating-small-high'
-        'grating-large-low'
-        'grating-large-high'
-        'plaid-small-low'
-        'plaid-small-high'
-        'plaid-large-low'
-        'plaid-large-high'};
-
-    condShortLabels = { ...
-        'G-S-L'
-        'G-S-H'
-        'G-L-L'
-        'G-L-H'
-        'P-S-L'
-        'P-S-H'
-        'P-L-L'
-        'P-L-H'};
-
-    barX = [1 2 4 5 8 9 11 12];
-
-    trialMeta = struct();
-    trialMeta.trialId = trialId;
-    trialMeta.stimName = cellstr(stimName);
-    trialMeta.stimCode = stimCode;
-    trialMeta.stimLabels = cellstr(stimLabels);
-
-    trialMeta.sizeValue = sizeValue;
-    trialMeta.sizeCode = sizeCode;
-    trialMeta.sizeValues = sizeVals;
-
-    trialMeta.contrastRaw = contrastRaw;
-    trialMeta.contrastCode = contrastCode;
-    trialMeta.contrastValuesByStim = contrastValuesByStim;
-
-    trialMeta.effectiveDirValue = effectiveDir;
-    trialMeta.stimDirCode = stimDirCode;
-    trialMeta.stimDirLabels = stimDirLabels;
-    trialMeta.stimDirValues = dirVals;
-
-    trialMeta.valid = valid;
-    trialMeta.condIdx = condIdx;
-
-    trialMeta.condLabels = condLabels;
-    trialMeta.condShortLabels = condShortLabels;
-    trialMeta.barX = barX;
-end
-
-% =========================================================================
-% Classify across latents into feedforward / feedback / ambiguous
-% =========================================================================
-function acrossCategory = dirsplit_classify_across_latents(acrossDelay, ambiguousIdxs, xDim_across)
-    acrossCategory = repmat({''}, 1, xDim_across);
-
-    ambiguousIdxs = unique(ambiguousIdxs(:)');
-    ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
-
-    for a = 1:xDim_across
-        if ismember(a, ambiguousIdxs)
-            acrossCategory{a} = 'ambiguous';
-        else
-            if isnan(acrossDelay(a)) || acrossDelay(a) == 0
-                acrossCategory{a} = 'ambiguous';
-            elseif acrossDelay(a) > 0
-                acrossCategory{a} = 'feedforward';
-            else
-                acrossCategory{a} = 'feedback';
-            end
-        end
-    end
-end
-
-% =========================================================================
-% Build one latent info struct
-% =========================================================================
-function latentInfo = dirsplit_make_latent_info(groupIdx, localIdx, xDim_across, acrossCategory, dslLogical, dslLogicalByStimDir, dslLogicalByStimNameDir, dslLogicalByCondition)
-
-    latentInfo = struct();
-    latentInfo.groupIndex = groupIdx;
-
-    if localIdx <= xDim_across
-        latentInfo.latentType = 'across';
-        latentInfo.acrossIndex = localIdx;
-        latentInfo.withinIndex = [];
-        latentInfo.acrossCategory = acrossCategory{localIdx};
-        latentInfo.latentLine = sprintf('Across latent %d (%s)', localIdx, acrossCategory{localIdx});
-    else
-        latentInfo.latentType = 'within';
-        latentInfo.acrossIndex = [];
-        latentInfo.withinIndex = localIdx - xDim_across;
-        latentInfo.acrossCategory = '';
-        latentInfo.latentLine = sprintf('Within latent %d', localIdx - xDim_across);
-    end
-
-    latentInfo.dslLabel = dsl_keep_remove_label(dslLogical, 'alltrials');
-    latentInfo.dslByStimDirLabel = dsl_keep_remove_label(dslLogicalByStimDir, 'bystimdir');
-    latentInfo.dslByStimNameDirLabel = dsl_keep_remove_label(dslLogicalByStimNameDir, 'bystimnamedir');
-    latentInfo.dslByConditionLabel = dsl_keep_remove_label(dslLogicalByCondition, 'bycondition');
-end
-
-% =========================================================================
-% Compute condition-wise means/SEMs within one stim_dir subset
-% =========================================================================
-function [meanTime, semTime, respMean, respSEM, respN, condTrialSeqIdx, condTrialIds] = ...
-    dirsplit_compute_condition_averages(X, trialMean, condIdx, trialIds, subsetMask, nCond)
-
-    T = size(X, 2);
-
-    meanTime = nan(nCond, T);
-    semTime  = nan(nCond, T);
-    respMean = nan(nCond, 1);
-    respSEM  = nan(nCond, 1);
-    respN    = zeros(nCond, 1);
-
-    condTrialSeqIdx = cell(nCond, 1);
-    condTrialIds    = cell(nCond, 1);
-
-    for c = 1:nCond
-        idx = find(subsetMask & (condIdx == c));
-        condTrialSeqIdx{c} = idx;
-        condTrialIds{c} = trialIds(idx);
-
-        if isempty(idx)
-            continue;
-        end
-
-        Xc = X(idx, :);
-        yc = trialMean(idx);
-
-        meanTime(c, :) = mean(Xc, 1, 'omitnan');
-
-        if size(Xc, 1) > 1
-            semTime(c, :) = std(Xc, 0, 1, 'omitnan') ./ sqrt(size(Xc, 1));
-        else
-            semTime(c, :) = zeros(1, T);
-        end
-
-        respMean(c) = mean(yc, 'omitnan');
-        if numel(yc) > 1
-            respSEM(c) = std(yc, 0, 'omitnan') ./ sqrt(numel(yc));
-        else
-            respSEM(c) = 0;
-        end
-        respN(c) = numel(yc);
-    end
-end
-
-% =========================================================================
-% Run 3-way ANOVA within one stim_dir subset
-% =========================================================================
-function anovaRes = dirsplit_run_threeway_anova(y, stimCode, sizeCode, contrastCode, subsetMask, alpha)
-
-    valid = subsetMask & isfinite(y) & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode);
-
-    anovaRes = struct();
-    anovaRes.p = nan(1, 7);
-    anovaRes.tbl = [];
-    anovaRes.stats = [];
-    anovaRes.terms = [];
-    anovaRes.termNames = {'Stim', 'Size', 'Contrast', ...
-                          'Stim*Size', 'Stim*Contrast', 'Size*Contrast', ...
-                          'Stim*Size*Contrast'};
-    anovaRes.alpha = alpha;
-
-    if sum(valid) < 8
-        return;
-    end
-
-    try
-        [p, tbl, stats, terms] = anovan( ...
-            y(valid), ...
-            {stimCode(valid), sizeCode(valid), contrastCode(valid)}, ...
-            'model', 'full', ...
-            'varnames', {'Stim', 'Size', 'Contrast'}, ...
-            'display', 'off');
-
-        anovaRes.p = p(:)';
-        anovaRes.tbl = tbl;
-        anovaRes.stats = stats;
-        anovaRes.terms = terms;
-    catch
-        % Leave outputs as NaN / empty if ANOVA fails
-    end
-end
-
-% =========================================================================
-% Compute marginal means/SEMs for the three main effects within one subset
-% =========================================================================
-function mainEffects = dirsplit_compute_main_effect_summaries(y, trialMeta, pVec, subsetMask)
-
-    valid = subsetMask & trialMeta.valid & isfinite(y);
-
-    mainEffects = struct([]);
-
-    % Stim
-    mainEffects(1).factor = 'Stim';
-    mainEffects(1).levelLabels = {'grating', 'plaid'};
-    mainEffects(1).means = [ ...
-        mean(y(valid & trialMeta.stimCode == 1), 'omitnan'), ...
-        mean(y(valid & trialMeta.stimCode == 2), 'omitnan')];
-    mainEffects(1).sems = [ ...
-        dirsplit_compute_sem(y(valid & trialMeta.stimCode == 1)), ...
-        dirsplit_compute_sem(y(valid & trialMeta.stimCode == 2))];
-    mainEffects(1).p = dirsplit_pick_p(pVec, 1);
-
-    % Size
-    mainEffects(2).factor = 'Size';
-    mainEffects(2).levelLabels = {'small', 'large'};
-    mainEffects(2).means = [ ...
-        mean(y(valid & trialMeta.sizeCode == 1), 'omitnan'), ...
-        mean(y(valid & trialMeta.sizeCode == 2), 'omitnan')];
-    mainEffects(2).sems = [ ...
-        dirsplit_compute_sem(y(valid & trialMeta.sizeCode == 1)), ...
-        dirsplit_compute_sem(y(valid & trialMeta.sizeCode == 2))];
-    mainEffects(2).p = dirsplit_pick_p(pVec, 2);
-
-    % Contrast
-    mainEffects(3).factor = 'Contrast';
-    mainEffects(3).levelLabels = {'low', 'high'};
-    mainEffects(3).means = [ ...
-        mean(y(valid & trialMeta.contrastCode == 1), 'omitnan'), ...
-        mean(y(valid & trialMeta.contrastCode == 2), 'omitnan')];
-    mainEffects(3).sems = [ ...
-        dirsplit_compute_sem(y(valid & trialMeta.contrastCode == 1)), ...
-        dirsplit_compute_sem(y(valid & trialMeta.contrastCode == 2))];
-    mainEffects(3).p = dirsplit_pick_p(pVec, 3);
-end
-
-% =========================================================================
-% Compute all simple effects within one stim_dir subset
-% =========================================================================
-function simpleEffects = dirsplit_compute_simple_effects(y, trialMeta, subsetMask, alpha)
-
-    valid = subsetMask & trialMeta.valid & isfinite(y);
-
-    template = struct( ...
-        'factor', '', ...
-        'context', '', ...
-        'condPair', [NaN NaN], ...
-        'xPair', [NaN NaN], ...
-        'p', NaN, ...
-        'n', [NaN NaN], ...
-        'significant', false);
-
-    simpleEffects = repmat(template, 12, 1);
-    ctr = 0;
-
-    % Contrast simple effects within each Stim x Size
-    for s = 1:2
-        for z = 1:2
-            idx1 = valid & trialMeta.stimCode == s & trialMeta.sizeCode == z & trialMeta.contrastCode == 1;
-            idx2 = valid & trialMeta.stimCode == s & trialMeta.sizeCode == z & trialMeta.contrastCode == 2;
-
-            ctr = ctr + 1;
-            simpleEffects(ctr) = dirsplit_build_simple_effect_entry( ...
-                template, ...
-                'Contrast', ...
-                sprintf('Stim=%d, Size=%d', s, z), ...
-                dirsplit_cond_index(s, z, 1), dirsplit_cond_index(s, z, 2), ...
-                trialMeta.barX(dirsplit_cond_index(s, z, 1)), ...
-                trialMeta.barX(dirsplit_cond_index(s, z, 2)), ...
-                y(idx1), y(idx2), alpha);
-        end
-    end
-
-    % Size simple effects within each Stim x Contrast
-    for s = 1:2
-        for c = 1:2
-            idx1 = valid & trialMeta.stimCode == s & trialMeta.sizeCode == 1 & trialMeta.contrastCode == c;
-            idx2 = valid & trialMeta.stimCode == s & trialMeta.sizeCode == 2 & trialMeta.contrastCode == c;
-
-            ctr = ctr + 1;
-            simpleEffects(ctr) = dirsplit_build_simple_effect_entry( ...
-                template, ...
-                'Size', ...
-                sprintf('Stim=%d, Contrast=%d', s, c), ...
-                dirsplit_cond_index(s, 1, c), dirsplit_cond_index(s, 2, c), ...
-                trialMeta.barX(dirsplit_cond_index(s, 1, c)), ...
-                trialMeta.barX(dirsplit_cond_index(s, 2, c)), ...
-                y(idx1), y(idx2), alpha);
-        end
-    end
-
-    % Stim simple effects within each Size x Contrast
-    for z = 1:2
-        for c = 1:2
-            idx1 = valid & trialMeta.stimCode == 1 & trialMeta.sizeCode == z & trialMeta.contrastCode == c;
-            idx2 = valid & trialMeta.stimCode == 2 & trialMeta.sizeCode == z & trialMeta.contrastCode == c;
-
-            ctr = ctr + 1;
-            simpleEffects(ctr) = dirsplit_build_simple_effect_entry( ...
-                template, ...
-                'Stim', ...
-                sprintf('Size=%d, Contrast=%d', z, c), ...
-                dirsplit_cond_index(1, z, c), dirsplit_cond_index(2, z, c), ...
-                trialMeta.barX(dirsplit_cond_index(1, z, c)), ...
-                trialMeta.barX(dirsplit_cond_index(2, z, c)), ...
-                y(idx1), y(idx2), alpha);
-        end
-    end
-
-    simpleEffects = simpleEffects(1:ctr);
-end
-
-% =========================================================================
-% Build one simple-effect entry
-% =========================================================================
-function S = dirsplit_build_simple_effect_entry(template, factorName, contextLabel, cond1, cond2, x1, x2, y1, y2, alpha)
-    [pVal, n1, n2] = dirsplit_robust_ttest2(y1, y2);
-
-    S = template;
-    S.factor = factorName;
-    S.context = contextLabel;
-    S.condPair = [cond1, cond2];
-    S.xPair = [x1, x2];
-    S.p = pVal;
-    S.n = [n1, n2];
-    S.significant = isfinite(pVal) && (pVal < alpha);
-end
-
-% =========================================================================
-% Robust two-sample t-test
-% =========================================================================
-function [pVal, n1, n2] = dirsplit_robust_ttest2(y1, y2)
-    y1 = y1(isfinite(y1));
-    y2 = y2(isfinite(y2));
-
-    n1 = numel(y1);
-    n2 = numel(y2);
-
-    if n1 < 2 || n2 < 2
-        pVal = NaN;
-        return;
-    end
-
-    try
-        [~, pVal] = ttest2(y1, y2, 'Vartype', 'unequal');
-    catch
-        pVal = NaN;
-    end
-end
-
-% =========================================================================
 % Plot across-latent time-course figure
 % Rows = stim_dir1 / stim_dir2
 % Columns = groups
@@ -2007,7 +1628,7 @@ function [figFile, pngFile] = dirsplit_plot_across_timecourse_figure(Results, ac
     category = Results.meta.acrossCategory{acrossIdx};
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
-    baseName = dirsplit_sanitize_filename(sprintf( ...
+    baseName = sanitize_filename(sprintf( ...
         'A%03d_%s_splitdir_tc', ...
         acrossIdx, category));
 
@@ -2031,7 +1652,7 @@ function [figFile, pngFile] = dirsplit_plot_across_timecourse_figure(Results, ac
             meanTime = Results.group(g).latent(acrossIdx).stim_dir(d).condition.meanTime;
             semTime  = Results.group(g).latent(acrossIdx).stim_dir(d).condition.semTime;
 
-            [legendHandlesLocal, ~] = dirsplit_plot_mean_sem_curves(ax, tAxis, meanTime, semTime);
+            [legendHandlesLocal, ~] = plot_mean_sem_curves(ax, tAxis, meanTime, semTime);
             if d == 1 && g == 1
                 legendHandles = legendHandlesLocal;
             end
@@ -2070,7 +1691,7 @@ function [figFile, pngFile] = dirsplit_plot_within_timecourse_figure(latentEntry
     w = latentEntry.withinIndex;
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
-    baseName = dirsplit_sanitize_filename(sprintf( ...
+    baseName = sanitize_filename(sprintf( ...
         'G%02d_W%03d_splitdir_tc', ...
         g, w));
 
@@ -2091,7 +1712,7 @@ function [figFile, pngFile] = dirsplit_plot_within_timecourse_figure(latentEntry
         meanTime = latentEntry.stim_dir(d).condition.meanTime;
         semTime  = latentEntry.stim_dir(d).condition.semTime;
 
-        [legendHandlesLocal, ~] = dirsplit_plot_mean_sem_curves(ax, meta.timeAxis, meanTime, semTime);
+        [legendHandlesLocal, ~] = plot_mean_sem_curves(ax, meta.timeAxis, meanTime, semTime);
         if d == 1
             legendHandles = legendHandlesLocal;
         end
@@ -2120,49 +1741,22 @@ function [figFile, pngFile] = dirsplit_plot_within_timecourse_figure(latentEntry
 end
 
 % =========================================================================
-% Plot condition curves with SEM as shaded region
-% =========================================================================
-function [lineHandles, patchHandles] = dirsplit_plot_mean_sem_curves(ax, tAxis, meanTime, semTime)
-
-    colors = lines(size(meanTime, 1));
-    lineHandles = gobjects(size(meanTime, 1), 1);
-    patchHandles = gobjects(size(meanTime, 1), 1);
-
-    for c = 1:size(meanTime, 1)
-        m = meanTime(c, :);
-        s = semTime(c, :);
-
-        if all(~isfinite(m))
-            continue;
-        end
-
-        upper = m + s;
-        lower = m - s;
-
-        patchHandles(c) = fill(ax, [tAxis, fliplr(tAxis)], [upper, fliplr(lower)], colors(c, :), ...
-            'FaceAlpha', 0.15, 'EdgeColor', 'none');
-
-        lineHandles(c) = plot(ax, tAxis, m, 'LineWidth', 1.5, 'Color', colors(c, :));
-    end
-end
-
-% =========================================================================
 % Plot ANOVA summary figure for one group/latent/stim_dir subset
 % =========================================================================
 function [figFile, pngFile] = dirsplit_plot_anova_summary_figure(latentEntry, meta, anovaDir, alpha)
 
     g = latentEntry.groupIndex;
     dirLabel = latentEntry.stimDirLabel;
-    dirValueStr = dirsplit_format_value(latentEntry.stimDirValue);
+    dirValueStr = format_value(latentEntry.stimDirValue);
 
     % Short, stable file name. DSL keep/remove states remain in figure title.
     if strcmp(latentEntry.latentType, 'across')
-        baseName = dirsplit_sanitize_filename(sprintf( ...
+        baseName = sanitize_filename(sprintf( ...
             'G%02d_A%03d_%s_%s%s_anova', ...
             g, latentEntry.acrossIndex, latentEntry.acrossCategory, ...
             dirLabel, dirValueStr));
     else
-        baseName = dirsplit_sanitize_filename(sprintf( ...
+        baseName = sanitize_filename(sprintf( ...
             'G%02d_W%03d_%s%s_anova', ...
             g, latentEntry.withinIndex, ...
             dirLabel, dirValueStr));
@@ -2175,16 +1769,16 @@ function [figFile, pngFile] = dirsplit_plot_anova_summary_figure(latentEntry, me
     tl = tiledlayout(3, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
 
     axLeft = nexttile(tl, 1, [3 1]);
-    dirsplit_plot_condition_bar_panel(axLeft, latentEntry, meta, alpha);
+    plot_condition_bar_panel(axLeft, latentEntry, meta, alpha);
 
     ax1 = nexttile(tl, 2);
-    dirsplit_plot_main_effect_panel(ax1, latentEntry.anova.mainEffects(1), alpha);
+    plot_main_effect_panel(ax1, latentEntry.anova.mainEffects(1), alpha);
 
     ax2 = nexttile(tl, 4);
-    dirsplit_plot_main_effect_panel(ax2, latentEntry.anova.mainEffects(2), alpha);
+    plot_main_effect_panel(ax2, latentEntry.anova.mainEffects(2), alpha);
 
     ax3 = nexttile(tl, 6);
-    dirsplit_plot_main_effect_panel(ax3, latentEntry.anova.mainEffects(3), alpha);
+    plot_main_effect_panel(ax3, latentEntry.anova.mainEffects(3), alpha);
 
     sgtitle(tl, latentEntry.titleLines, 'Interpreter', 'none');
 
@@ -2194,221 +1788,9 @@ function [figFile, pngFile] = dirsplit_plot_anova_summary_figure(latentEntry, me
 end
 
 % =========================================================================
-% Plot the 8-condition bar panel with all significant simple-effect pairs
-% =========================================================================
-function dirsplit_plot_condition_bar_panel(ax, latentEntry, meta, alpha)
-
-    xPos = meta.conditionBarX;
-    means = latentEntry.condition.meanResponse(:)';
-    sems  = latentEntry.condition.semResponse(:)';
-
-    bar(ax, xPos, means, 0.8);
-    hold(ax, 'on');
-    errorbar(ax, xPos, means, sems, 'k.', 'LineWidth', 1);
-
-    xline(ax, 6.5, '--');
-    xline(ax, 3.0, ':');
-    xline(ax, 10.0, ':');
-
-    set(ax, 'XTick', xPos, 'XTickLabel', meta.conditionShortLabels);
-    xtickangle(ax, 35);
-
-    xlabel(ax, 'Condition');
-    ylabel(ax, 'Trial-mean response');
-    title(ax, 'Condition means ± SEM');
-
-    [ymin, ymax, yrng] = dirsplit_safe_y_range(means, sems);
-    bracketH = 0.03 * yrng;
-    yBase = ymax + 0.04 * yrng;
-    yStep = 0.07 * yrng;
-
-    sigSE = latentEntry.anova.simpleEffects;
-    if ~isempty(sigSE)
-        keep = arrayfun(@(s) s.significant, sigSE);
-        sigSE = sigSE(keep);
-
-        if ~isempty(sigSE)
-            spans = arrayfun(@(s) abs(diff(s.xPair)), sigSE);
-            x1all = arrayfun(@(s) s.xPair(1), sigSE);
-            [~, ord] = sortrows([spans(:), x1all(:)], [1 2]);
-            sigSE = sigSE(ord);
-
-            for k = 1:numel(sigSE)
-                starText = dirsplit_p_to_stars(sigSE(k).p);
-                yThis = yBase + (k-1) * yStep;
-                dirsplit_add_sig_bracket(ax, sigSE(k).xPair(1), sigSE(k).xPair(2), yThis, starText, bracketH);
-            end
-
-            yTop = yBase + (numel(sigSE) - 1) * yStep + 2.2 * bracketH;
-            ylim(ax, [ymin - 0.08*yrng, yTop + 0.05*yrng]);
-        else
-            ylim(ax, [ymin - 0.08*yrng, ymax + 0.12*yrng]);
-        end
-    else
-        ylim(ax, [ymin - 0.08*yrng, ymax + 0.12*yrng]);
-    end
-
-    hold(ax, 'off');
-end
-
-% =========================================================================
-% Plot one main-effect panel
-% =========================================================================
-function dirsplit_plot_main_effect_panel(ax, mainEffect, alpha)
-
-    means = mainEffect.means(:)';
-    sems  = mainEffect.sems(:)';
-
-    bar(ax, 1:2, means, 0.8);
-    hold(ax, 'on');
-    errorbar(ax, 1:2, means, sems, 'k.', 'LineWidth', 1);
-
-    set(ax, 'XTick', 1:2, 'XTickLabel', mainEffect.levelLabels);
-    ylabel(ax, 'Response');
-    title(ax, sprintf('%s main effect', mainEffect.factor), 'Interpreter', 'none');
-
-    [ymin, ymax, yrng] = dirsplit_safe_y_range(means, sems);
-    bracketH = 0.035 * yrng;
-    yBase = ymax + 0.05 * yrng;
-
-    if isfinite(mainEffect.p) && mainEffect.p < alpha
-        dirsplit_add_sig_bracket(ax, 1, 2, yBase, dirsplit_p_to_stars(mainEffect.p), bracketH);
-        ylim(ax, [ymin - 0.08*yrng, yBase + 2.2*bracketH + 0.05*yrng]);
-    else
-        ylim(ax, [ymin - 0.08*yrng, ymax + 0.12*yrng]);
-    end
-
-    hold(ax, 'off');
-end
-
-% =========================================================================
-% Safe y-range helper
-% =========================================================================
-function [ymin, ymax, yrng] = dirsplit_safe_y_range(means, sems)
-    vals = [means(:) + sems(:); means(:) - sems(:)];
-    vals = vals(isfinite(vals));
-
-    if isempty(vals)
-        ymin = -1;
-        ymax = 1;
-        yrng = 2;
-        return;
-    end
-
-    ymin = min(vals);
-    ymax = max(vals);
-    yrng = ymax - ymin;
-
-    if ~isfinite(yrng) || yrng <= 0
-        base = max(max(abs(vals)), 1);
-        ymin = min(vals) - 0.5 * base;
-        ymax = max(vals) + 0.5 * base;
-        yrng = ymax - ymin;
-    end
-end
-
-% =========================================================================
-% Draw one significance bracket
-% =========================================================================
-function dirsplit_add_sig_bracket(ax, x1, x2, y, txt, h)
-    if nargin < 6 || ~isfinite(h) || h <= 0
-        h = 0.05;
-    end
-    plot(ax, [x1 x1 x2 x2], [y y+h y+h y], 'k-', 'LineWidth', 1);
-    text(ax, mean([x1 x2]), y + 1.15*h, txt, ...
-        'HorizontalAlignment', 'center', ...
-        'VerticalAlignment', 'bottom', ...
-        'FontWeight', 'bold');
-end
-
-% =========================================================================
-% Convert p-value to stars
-% =========================================================================
-function txt = dirsplit_p_to_stars(p)
-    if ~isfinite(p)
-        txt = 'n.s.';
-    elseif p < 0.001
-        txt = '***';
-    elseif p < 0.01
-        txt = '**';
-    elseif p < 0.05
-        txt = '*';
-    else
-        txt = 'n.s.';
-    end
-end
-
-% =========================================================================
-% Condition index helper
-% Order:
-%   1 grating-small-low
-%   2 grating-small-high
-%   3 grating-large-low
-%   4 grating-large-high
-%   5 plaid-small-low
-%   6 plaid-small-high
-%   7 plaid-large-low
-%   8 plaid-large-high
-% =========================================================================
-function idx = dirsplit_cond_index(stimCode, sizeCode, contrastCode)
-    idx = (stimCode - 1) * 4 + (sizeCode - 1) * 2 + contrastCode;
-end
-
-% =========================================================================
-% SEM helper
-% =========================================================================
-function s = dirsplit_compute_sem(x)
-    x = x(isfinite(x));
-    if isempty(x)
-        s = NaN;
-    elseif numel(x) == 1
-        s = 0;
-    else
-        s = std(x, 0) / sqrt(numel(x));
-    end
-end
-
-% =========================================================================
-% Safe p-value lookup
-% =========================================================================
-function p = dirsplit_pick_p(pVec, idx)
-    if isempty(pVec) || numel(pVec) < idx
-        p = NaN;
-    else
-        p = pVec(idx);
-    end
-end
-
-% =========================================================================
-% Create directory if needed
-% =========================================================================
-function dirsplit_ensure_dir(folderPath)
-    if ~exist(folderPath, 'dir')
-        mkdir(folderPath);
-    end
-end
-
-% =========================================================================
-% Sanitize file names
-% =========================================================================
-function out = dirsplit_sanitize_filename(in)
-    out = regexprep(in, '[^a-zA-Z0-9_\-]', '_');
-    out = regexprep(out, '_+', '_');
-end
-
-% =========================================================================
-% Convert label to token for file names
-% =========================================================================
-function out = dirsplit_label_to_token(in)
-    out = lower(in);
-    out = strrep(out, ' ', '_');
-    out = dirsplit_sanitize_filename(out);
-end
-
-% =========================================================================
 % Format numeric value for titles and file names
 % =========================================================================
-function s = dirsplit_format_value(v)
+function s = format_value(v)
     if ~isfinite(v)
         s = 'NaN';
         return;
