@@ -2,12 +2,12 @@
 clc;clear
 % Synthetic data generated from a DLAG model
 % dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1/model_data_allruns';
-dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\model_data_allruns';
+dat_file = 'I:\np_data\RafiL001p0121_g1\catgt_RafiL001p0121_g1\model_data_allruns';
 fprintf('Reading from %s \n',dat_file);
 load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-data_content = 'z_across_conditions';  
-data_condtion=[1:16];
+data_content = 'raw_count';  
+data_condtion=[];
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition, 
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
@@ -205,8 +205,13 @@ gp_params=plotGPparams_dlag(res.estParams, binWidth, rGroups, ...
                   'units', 'ms', ...
                   'sig', delaySig, ...
                   'alpha', alpha);
+
+if isempty(gp_params.DelayMatrix)
+    gp_params.delays=[];
+else
  gp_params.delays = gp_params.DelayMatrix(rGroups(2),:) ...
            - gp_params.DelayMatrix(rGroups(1),:);
+end
 
 savefig([tempfname,'/Delay_timescale_point_es_results.fig'])
 exportgraphics(gcf, [tempfname,'/Delay_timescale_point_es_results.png'])

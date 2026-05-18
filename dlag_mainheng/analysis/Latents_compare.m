@@ -26,11 +26,11 @@
 
 clc; clear;
 
-data_content = 'raw_count';
+data_content = 'demean_count_within_trial';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
-data_condtion = [];
+data_condtion = [1:16];
 runIdx = 1;
 DSL_threshold = 0.3;
 
@@ -125,7 +125,6 @@ for cond_i = 1:numConditions
 
     trial_condition_ids = [];
     trial_stim_dir_values = [];
-    trial_stim_dir_group_labels = {};
     trial_stimnamedir_group_ids = [];
     trial_stimnamedir_group_labels = {};
     trial_condition_group_labels = {};
@@ -150,12 +149,6 @@ for cond_i = 1:numConditions
         % ---------------------------------------------------------
         % 1) split by stim_dir
         % ---------------------------------------------------------
-        % Use the same stim_dir1/stim_dir2 convention as the other
-        % condition-summary code: sort the effective stimulus directions,
-        % then label the smaller value as stim dir1 and the larger value as
-        % stim dir2. File names still use group%d for neural group / area.
-        trial_stim_dir_group_labels = buildStimDirSplitLabelsFromTrialValues(trial_stim_dir_values);
-
         [DSL, DSL_hist_stats_bystimdir, DSL_figs_bystimdir] = ...
             computeDSL_dlag_bytrialgroups( ...
             DSL, ...
@@ -164,7 +157,7 @@ for cond_i = 1:numConditions
             seqEst, ...
             DSL_threshold, ...
             trial_stim_dir_values, ...
-            trial_stim_dir_group_labels, ...
+            {}, ...
             'bystimdir', ...
             'stim dir split');
 
@@ -455,7 +448,6 @@ for cond_i = 1:numConditions
              'DSL_hist_stats_bycondition', 'Stats_bycondition', ...
              'CondPosteriorVarExp', ...
              'trial_condition_ids', 'trial_stim_dir_values', ...
-             'trial_stim_dir_group_labels', ...
              'trial_stimnamedir_group_ids', 'trial_stimnamedir_group_labels', ...
              'trial_condition_group_labels', ...
              'DSL_threshold', 'this_condition', 'data_content', 'runIdx', ...
@@ -677,26 +669,9 @@ end
 function [DSL, histStatsByStimDir, figHandlesByStimDir] = computeDSL_dlag_bystimdir( ...
     DSL, xDim_across, xDim_within, seqEst, DSL_threshold, trial_stim_dir_values)
 
-    group_labels = buildStimDirSplitLabelsFromTrialValues(trial_stim_dir_values);
-
     [DSL, histStatsByStimDir, figHandlesByStimDir] = computeDSL_dlag_bytrialgroups( ...
         DSL, xDim_across, xDim_within, seqEst, DSL_threshold, ...
-        trial_stim_dir_values, group_labels, 'bystimdir', 'stim dir split');
-end
-
-
-function group_labels = buildStimDirSplitLabelsFromTrialValues(trial_stim_dir_values)
-
-    stimDirVals = unique(trial_stim_dir_values(~isnan(trial_stim_dir_values)));
-    stimDirVals = sort(stimDirVals(:)');
-
-    if numel(stimDirVals) ~= 2
-        error('stim_dir split expects exactly 2 unique dir values, found %d.', numel(stimDirVals));
-    end
-
-    group_labels = { ...
-        sprintf('stim dir1 = %s', formatSummaryValue(stimDirVals(1))), ...
-        sprintf('stim dir2 = %s', formatSummaryValue(stimDirVals(2)))};
+        trial_stim_dir_values, {}, 'bystimdir', 'stim dir split');
 end
 
 
@@ -1158,8 +1133,8 @@ function [Stats, figHandles] = summarizeLatentCategories(varexp_indiv, xDim_acro
         end
     end
 
-    delays = extractDelayInput(gp_params);
-    acrossDelay = resolveAcrossDelay(delays, xDim_across);
+    
+    acrossDelay = resolveAcrossDelay(gp_params, xDim_across);
 
     ambiguousIdxs = unique(ambiguousIdxs(:)');
     ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
@@ -1317,20 +1292,6 @@ function figHandle = plotOneBarFigure(values, labels, figTitle, xlab, ylab)
     ylim([0, max(100, max(values) * 1.1 + eps)]);
 end
 
-
-function delays = extractDelayInput(gp_params)
-    if isstruct(gp_params)
-        if isfield(gp_params, 'delays')
-            delays = gp_params.delays;
-        elseif isfield(gp_params, 'DelayMatrix')
-            delays = gp_params.DelayMatrix;
-        else
-            error('gp_params must contain field .delays or .DelayMatrix.');
-        end
-    else
-        delays = gp_params;
-    end
-end
 
 
 function acrossDelay = resolveAcrossDelay(delays, xDim_across)
@@ -2094,8 +2055,7 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
     % -------------------------------------------------------------
     % Latent category classification
     % -------------------------------------------------------------
-    delays = extractDelayInput(gp_params);
-    acrossDelay = resolveAcrossDelay(delays, xDim_across);
+    acrossDelay = resolveAcrossDelay(gp_params, xDim_across);
 
     ambiguousIdxs = unique(ambiguousIdxs(:)');
     ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
