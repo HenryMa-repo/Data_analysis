@@ -259,181 +259,39 @@ for cond_i = 1:numConditions
         main_filtered_display_name);
 
     % -------------------------------------------------------------
-    % Save original DSL figures
+    % Save figures
     % -------------------------------------------------------------
-    for g = 1:numel(DSL_figs)
-        saveOneFigure(DSL_figs(g), tempfname, sprintf('DSL_distribution_group%d', g));
-        close(DSL_figs(g));
-    end
+    saveFigureVector(DSL_figs, tempfname, 'DSL_distribution_group%d');
 
-    % -------------------------------------------------------------
-    % Save NEW split-by-stim_dir DSL distribution figures
-    % -------------------------------------------------------------
+    saveCategoryFigureSet(Stats_figs, tempfname, struct( ...
+        'allLatentPct', sprintf('percentage_latents_all_group%%d'), ...
+        'allSharedVarPct', sprintf('percentage_shared_variance_all_group%%d'), ...
+        'filteredLatentPct', sprintf('percentage_latents_%s_group%%d', main_filtered_file_tag), ...
+        'filteredSharedVarPct', sprintf('percentage_shared_variance_%s_group%%d', main_filtered_file_tag)));
+
     if ~use_condition_mode
-        for g = 1:numel(DSL_figs_bystimdir)
-            if isgraphics(DSL_figs_bystimdir(g))
-                saveOneFigure(DSL_figs_bystimdir(g), tempfname, ...
-                    sprintf('stim_dir_splited_DSL_distribution_group%d', g));
-                close(DSL_figs_bystimdir(g));
-            end
-        end
-    end
+        saveFigureVector(DSL_figs_bystimdir, tempfname, 'stim_dir_splited_DSL_distribution_group%d');
+        saveFigureVector(DSL_figs_bystimnamedir, tempfname, 'stim_name_stim_dir_splited_DSL_distribution_group%d');
+        saveFigureVector(DSL_figs_bycondition, tempfname, 'condition_splited_DSL_distribution_group%d');
 
-    % -------------------------------------------------------------
-    % Save NEW split-by-stim_name x stim_dir DSL distribution figures
-    % -------------------------------------------------------------
-    if ~use_condition_mode
-        for g = 1:numel(DSL_figs_bystimnamedir)
-            if isgraphics(DSL_figs_bystimnamedir(g))
-                saveOneFigure(DSL_figs_bystimnamedir(g), tempfname, ...
-                    sprintf('stim_name_stim_dir_splited_DSL_distribution_group%d', g));
-                close(DSL_figs_bystimnamedir(g));
-            end
-        end
-    end
+        saveCategoryFigureSet(Stats_figs_bystimdir, tempfname, struct( ...
+            'filteredLatentPct', 'stim_dir_splited_percentage_latents_stim_dir_DSL_filtered_group%d', ...
+            'filteredSharedVarPct', 'stim_dir_splited_percentage_shared_variance_stim_dir_DSL_filtered_group%d'));
 
-    % -------------------------------------------------------------
-    % Save NEW split-by-condition DSL distribution figures
-    % -------------------------------------------------------------
-    if ~use_condition_mode
-        for g = 1:numel(DSL_figs_bycondition)
-            if isgraphics(DSL_figs_bycondition(g))
-                saveOneFigure(DSL_figs_bycondition(g), tempfname, ...
-                    sprintf('condition_splited_DSL_distribution_group%d', g));
-                close(DSL_figs_bycondition(g));
-            end
-        end
-    end
+        saveCategoryFigureSet(Stats_figs_bystimnamedir, tempfname, struct( ...
+            'filteredLatentPct', 'stim_name_stim_dir_splited_percentage_latents_stim_name_stim_dir_DSL_filtered_group%d', ...
+            'filteredSharedVarPct', 'stim_name_stim_dir_splited_percentage_shared_variance_stim_name_stim_dir_DSL_filtered_group%d'));
 
-    % -------------------------------------------------------------
-    % Save original category figures
-    % -------------------------------------------------------------
-    for g = 1:numel(Stats_figs)
-        saveOneFigure(Stats_figs(g).allLatentPct, tempfname, sprintf('percentage_latents_all_group%d', g));
-        saveOneFigure(Stats_figs(g).allSharedVarPct, tempfname, sprintf('percentage_shared_variance_all_group%d', g));
-        saveOneFigure(Stats_figs(g).filteredLatentPct, tempfname, sprintf('percentage_latents_%s_group%d', main_filtered_file_tag, g));
-        saveOneFigure(Stats_figs(g).filteredSharedVarPct, tempfname, sprintf('percentage_shared_variance_%s_group%d', main_filtered_file_tag, g));
+        saveCategoryFigureSet(Stats_figs_bycondition, tempfname, struct( ...
+            'filteredLatentPct', 'condition_splited_percentage_latents_condition_DSL_filtered_group%d', ...
+            'filteredSharedVarPct', 'condition_splited_percentage_shared_variance_condition_DSL_filtered_group%d'));
 
-        close(Stats_figs(g).allLatentPct);
-        close(Stats_figs(g).allSharedVarPct);
-        close(Stats_figs(g).filteredLatentPct);
-        close(Stats_figs(g).filteredSharedVarPct);
-    end
-
-    % -------------------------------------------------------------
-    % Save NEW split-by-stim_dir filtered category figures
-    % -------------------------------------------------------------
-    if ~use_condition_mode && ~isempty(Stats_figs_bystimdir)
-        for g = 1:numel(Stats_figs_bystimdir)
-            saveOneFigure(Stats_figs_bystimdir(g).filteredLatentPct, tempfname, ...
-                sprintf('stim_dir_splited_percentage_latents_stim_dir_DSL_filtered_group%d', g));
-
-            saveOneFigure(Stats_figs_bystimdir(g).filteredSharedVarPct, tempfname, ...
-                sprintf('stim_dir_splited_percentage_shared_variance_stim_dir_DSL_filtered_group%d', g));
-
-            if isgraphics(Stats_figs_bystimdir(g).allLatentPct)
-                close(Stats_figs_bystimdir(g).allLatentPct);
-            end
-            if isgraphics(Stats_figs_bystimdir(g).allSharedVarPct)
-                close(Stats_figs_bystimdir(g).allSharedVarPct);
-            end
-            if isgraphics(Stats_figs_bystimdir(g).filteredLatentPct)
-                close(Stats_figs_bystimdir(g).filteredLatentPct);
-            end
-            if isgraphics(Stats_figs_bystimdir(g).filteredSharedVarPct)
-                close(Stats_figs_bystimdir(g).filteredSharedVarPct);
-            end
-        end
-    end
-
-    % -------------------------------------------------------------
-    % Save NEW stim_name x stim_dir split filtered category figures
-    % -------------------------------------------------------------
-    if ~use_condition_mode && ~isempty(Stats_figs_bystimnamedir)
-        for g = 1:numel(Stats_figs_bystimnamedir)
-            saveOneFigure(Stats_figs_bystimnamedir(g).filteredLatentPct, tempfname, ...
-                sprintf('stim_name_stim_dir_splited_percentage_latents_stim_name_stim_dir_DSL_filtered_group%d', g));
-            saveOneFigure(Stats_figs_bystimnamedir(g).filteredSharedVarPct, tempfname, ...
-                sprintf('stim_name_stim_dir_splited_percentage_shared_variance_stim_name_stim_dir_DSL_filtered_group%d', g));
-
-            if isgraphics(Stats_figs_bystimnamedir(g).allLatentPct)
-                close(Stats_figs_bystimnamedir(g).allLatentPct);
-            end
-            if isgraphics(Stats_figs_bystimnamedir(g).allSharedVarPct)
-                close(Stats_figs_bystimnamedir(g).allSharedVarPct);
-            end
-            if isgraphics(Stats_figs_bystimnamedir(g).filteredLatentPct)
-                close(Stats_figs_bystimnamedir(g).filteredLatentPct);
-            end
-            if isgraphics(Stats_figs_bystimnamedir(g).filteredSharedVarPct)
-                close(Stats_figs_bystimnamedir(g).filteredSharedVarPct);
-            end
-        end
-    end
-
-    % -------------------------------------------------------------
-    % Save NEW condition split filtered category figures
-    % -------------------------------------------------------------
-    if ~use_condition_mode && ~isempty(Stats_figs_bycondition)
-        for g = 1:numel(Stats_figs_bycondition)
-            saveOneFigure(Stats_figs_bycondition(g).filteredLatentPct, tempfname, ...
-                sprintf('condition_splited_percentage_latents_condition_DSL_filtered_group%d', g));
-            saveOneFigure(Stats_figs_bycondition(g).filteredSharedVarPct, tempfname, ...
-                sprintf('condition_splited_percentage_shared_variance_condition_DSL_filtered_group%d', g));
-
-            if isgraphics(Stats_figs_bycondition(g).allLatentPct)
-                close(Stats_figs_bycondition(g).allLatentPct);
-            end
-            if isgraphics(Stats_figs_bycondition(g).allSharedVarPct)
-                close(Stats_figs_bycondition(g).allSharedVarPct);
-            end
-            if isgraphics(Stats_figs_bycondition(g).filteredLatentPct)
-                close(Stats_figs_bycondition(g).filteredLatentPct);
-            end
-            if isgraphics(Stats_figs_bycondition(g).filteredSharedVarPct)
-                close(Stats_figs_bycondition(g).filteredSharedVarPct);
-            end
-        end
-    end
-
-    % -------------------------------------------------------------
-    % Save NEW condition-specific posterior shared variance figures
-    % Category-level figures only. Single-latent figures are not saved.
-    % -------------------------------------------------------------
-    if ~use_condition_mode && ~isempty(CondPosteriorVarExp_figs)
-
-        for g = 1:numel(CondPosteriorVarExp_figs)
-
-            if isgraphics(CondPosteriorVarExp_figs(g).allSharedVarPct)
-                saveOneFigure(CondPosteriorVarExp_figs(g).allSharedVarPct, tempfname, ...
-                    sprintf('condition_specific_posterior_shared_varexp_all_group%d', g));
-                close(CondPosteriorVarExp_figs(g).allSharedVarPct);
-            end
-
-            if isgraphics(CondPosteriorVarExp_figs(g).allTrialsDSLfilteredSharedVarPct)
-                saveOneFigure(CondPosteriorVarExp_figs(g).allTrialsDSLfilteredSharedVarPct, tempfname, ...
-                    sprintf('condition_specific_posterior_shared_varexp_all_trials_DSL_filtered_group%d', g));
-                close(CondPosteriorVarExp_figs(g).allTrialsDSLfilteredSharedVarPct);
-            end
-
-            if isgraphics(CondPosteriorVarExp_figs(g).stimDirDSLfilteredSharedVarPct)
-                saveOneFigure(CondPosteriorVarExp_figs(g).stimDirDSLfilteredSharedVarPct, tempfname, ...
-                    sprintf('condition_specific_posterior_shared_varexp_stim_dir_DSL_filtered_group%d', g));
-                close(CondPosteriorVarExp_figs(g).stimDirDSLfilteredSharedVarPct);
-            end
-
-            if isgraphics(CondPosteriorVarExp_figs(g).stimNameDirDSLfilteredSharedVarPct)
-                saveOneFigure(CondPosteriorVarExp_figs(g).stimNameDirDSLfilteredSharedVarPct, tempfname, ...
-                    sprintf('condition_specific_posterior_shared_varexp_stim_name_stim_dir_DSL_filtered_group%d', g));
-                close(CondPosteriorVarExp_figs(g).stimNameDirDSLfilteredSharedVarPct);
-            end
-
-            if isgraphics(CondPosteriorVarExp_figs(g).conditionDSLfilteredSharedVarPct)
-                saveOneFigure(CondPosteriorVarExp_figs(g).conditionDSLfilteredSharedVarPct, tempfname, ...
-                    sprintf('condition_specific_posterior_shared_varexp_condition_DSL_filtered_group%d', g));
-                close(CondPosteriorVarExp_figs(g).conditionDSLfilteredSharedVarPct);
-            end
-        end
+        saveCategoryFigureSet(CondPosteriorVarExp_figs, tempfname, struct( ...
+            'allSharedVarPct', 'condition_specific_posterior_shared_varexp_all_group%d', ...
+            'allTrialsDSLfilteredSharedVarPct', 'condition_specific_posterior_shared_varexp_all_trials_DSL_filtered_group%d', ...
+            'stimDirDSLfilteredSharedVarPct', 'condition_specific_posterior_shared_varexp_stim_dir_DSL_filtered_group%d', ...
+            'stimNameDirDSLfilteredSharedVarPct', 'condition_specific_posterior_shared_varexp_stim_name_stim_dir_DSL_filtered_group%d', ...
+            'conditionDSLfilteredSharedVarPct', 'condition_specific_posterior_shared_varexp_condition_DSL_filtered_group%d'));
     end
 
     % -------------------------------------------------------------
@@ -481,10 +339,7 @@ if use_condition_mode
     % =============================================================
     [SummaryDSL, SummaryDSL_figs] = summarizeAllConditionsDSL(AllConditionResults, DSL_threshold);
 
-    for g = 1:numel(SummaryDSL_figs)
-        saveOneFigure(SummaryDSL_figs(g), '.', sprintf('%s_sum_all_conditions_DSL_distribution_group%d', data_content, g));
-        close(SummaryDSL_figs(g));
-    end
+    saveFigureVector(SummaryDSL_figs, '.', sprintf('%s_sum_all_conditions_DSL_distribution_group%%d', data_content));
 
     % =============================================================
     % Sum all conditions: percentage latents / shared variance
@@ -492,21 +347,11 @@ if use_condition_mode
     % =============================================================
     [SummaryCategory, SummaryCategory_figs] = summarizeAllConditionsCategories(AllConditionResults, condition_list, condition_full);
 
-    for g = 1:numel(SummaryCategory_figs)
-        saveOneFigure(SummaryCategory_figs(g).allLatentPct, ...
-            '.', sprintf('%s_sum_all_conditions_percentage_latents_all_group%d', data_content, g));
-        saveOneFigure(SummaryCategory_figs(g).allSharedVarPct, ...
-            '.', sprintf('%s_sum_all_conditions_percentage_shared_variance_all_group%d', data_content, g));
-        saveOneFigure(SummaryCategory_figs(g).filteredLatentPct, ...
-            '.', sprintf('%s_sum_all_conditions_percentage_latents_%s_group%d', data_content, SummaryCategory.meta.filteredFileTag, g));
-        saveOneFigure(SummaryCategory_figs(g).filteredSharedVarPct, ...
-            '.', sprintf('%s_sum_all_conditions_percentage_shared_variance_%s_group%d', data_content, SummaryCategory.meta.filteredFileTag, g));
-
-        close(SummaryCategory_figs(g).allLatentPct);
-        close(SummaryCategory_figs(g).allSharedVarPct);
-        close(SummaryCategory_figs(g).filteredLatentPct);
-        close(SummaryCategory_figs(g).filteredSharedVarPct);
-    end
+    saveCategoryFigureSet(SummaryCategory_figs, '.', struct( ...
+        'allLatentPct', sprintf('%s_sum_all_conditions_percentage_latents_all_group%%d', data_content), ...
+        'allSharedVarPct', sprintf('%s_sum_all_conditions_percentage_shared_variance_all_group%%d', data_content), ...
+        'filteredLatentPct', sprintf('%s_sum_all_conditions_percentage_latents_%s_group%%d', data_content, SummaryCategory.meta.filteredFileTag), ...
+        'filteredSharedVarPct', sprintf('%s_sum_all_conditions_percentage_shared_variance_%s_group%%d', data_content, SummaryCategory.meta.filteredFileTag)));
 
     save(sprintf('%s_sum_all_conditions_DSL_and_latent_category_stats.mat', data_content), ...
          'AllConditionResults', 'SummaryDSL', 'SummaryCategory', ...
@@ -663,15 +508,6 @@ function [DSL, histStats, figHandles] = computeDSL_dlag(xDim_across, xDim_within
         figHandles(g) = tmpFig;
         histStats(g) = tmpHist;
     end
-end
-
-
-function [DSL, histStatsByStimDir, figHandlesByStimDir] = computeDSL_dlag_bystimdir( ...
-    DSL, xDim_across, xDim_within, seqEst, DSL_threshold, trial_stim_dir_values)
-
-    [DSL, histStatsByStimDir, figHandlesByStimDir] = computeDSL_dlag_bytrialgroups( ...
-        DSL, xDim_across, xDim_within, seqEst, DSL_threshold, ...
-        trial_stim_dir_values, {}, 'bystimdir', 'stim dir split');
 end
 
 
@@ -1133,30 +969,14 @@ function [Stats, figHandles] = summarizeLatentCategories(varexp_indiv, xDim_acro
         end
     end
 
-    
-    acrossDelay = gp_params.delays;
 
-    ambiguousIdxs = unique(ambiguousIdxs(:)');
-    ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
-
-    acrossIdx = 1:xDim_across;
-
-    zeroOrNaNIdx = acrossIdx((acrossDelay == 0) | isnan(acrossDelay));
-    ambiguousAll = unique([ambiguousIdxs, zeroOrNaNIdx]);
-
-    ffIdx = find(acrossDelay > 0);
-    fbIdx = find(acrossDelay < 0);
-
-    ffIdx = setdiff(ffIdx, ambiguousAll);
-    fbIdx = setdiff(fbIdx, ambiguousAll);
-
-    coveredAcross = unique([ffIdx, fbIdx, ambiguousAll]);
-    missingAcross = setdiff(acrossIdx, coveredAcross);
-    if ~isempty(missingAcross)
-        ambiguousAll = unique([ambiguousAll, missingAcross]);
-    end
-
-    labels = {'Across', 'Within', 'Feedforward', 'Feedback', 'Ambiguous'};
+    latentClass = classifyDlagLatents(xDim_across, gp_params, ambiguousIdxs);
+    labels = latentClass.categoryLabels;
+    acrossDelay = latentClass.acrossDelay;
+    acrossIdx = latentClass.acrossIdx;
+    ffIdx = latentClass.feedforwardIdx;
+    fbIdx = latentClass.feedbackIdx;
+    ambiguousAll = latentClass.ambiguousIdx;
 
     Stats = struct();
     Stats.labels = labels;
@@ -1180,28 +1000,7 @@ function [Stats, figHandles] = summarizeLatentCategories(varexp_indiv, xDim_acro
         keepAll = true(1, localDims(g));
         keepFiltered = reshape(DSL.logical{g}, 1, []) ~= 0;
 
-        acrossMask = false(1, localDims(g));
-        acrossMask(1:xDim_across) = true;
-
-        withinMask = false(1, localDims(g));
-        withinMask(xDim_across+1:end) = true;
-
-        ffMask = false(1, localDims(g));
-        ffMask(ffIdx) = true;
-
-        fbMask = false(1, localDims(g));
-        fbMask(fbIdx) = true;
-
-        ambMask = false(1, localDims(g));
-        ambMask(ambiguousAll) = true;
-
-        categoryMasks = {
-            acrossMask
-            withinMask
-            ffMask
-            fbMask
-            ambMask
-        };
+        categoryMasks = makeDlagCategoryMasks(localDims(g), xDim_across, ffIdx, fbIdx, ambiguousAll);
 
         Stats.group(g).name = sprintf('Group %d', g);
         Stats.group(g).all = computeOneMethod(ve, keepAll, categoryMasks, labels);
@@ -1237,6 +1036,126 @@ function [Stats, figHandles] = summarizeLatentCategories(varexp_indiv, xDim_acro
                 'Percentage of shared variance explained (%)');
         end
     end
+end
+
+
+
+function latentClass = classifyDlagLatents(xDim_across, gp_params, ambiguousIdxs)
+
+    if ~isfield(gp_params, 'delays')
+        error('gp_params must contain field delays.');
+    end
+
+    acrossDelay = reshape(gp_params.delays, 1, []);
+    if numel(acrossDelay) < xDim_across
+        error('gp_params.delays has fewer entries than xDim_across.');
+    end
+    acrossDelay = acrossDelay(1:xDim_across);
+
+    ambiguousIdxs = unique(ambiguousIdxs(:)');
+    ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
+
+    acrossIdx = 1:xDim_across;
+    zeroOrNaNIdx = acrossIdx((acrossDelay == 0) | isnan(acrossDelay));
+    ambiguousAll = unique([ambiguousIdxs, zeroOrNaNIdx]);
+
+    ffIdx = find(acrossDelay > 0);
+    fbIdx = find(acrossDelay < 0);
+    ffIdx = setdiff(ffIdx, ambiguousAll);
+    fbIdx = setdiff(fbIdx, ambiguousAll);
+
+    coveredAcross = unique([ffIdx, fbIdx, ambiguousAll]);
+    missingAcross = setdiff(acrossIdx, coveredAcross);
+    if ~isempty(missingAcross)
+        ambiguousAll = unique([ambiguousAll, missingAcross]);
+    end
+
+    latentClass = struct();
+    latentClass.categoryLabels = {'Across', 'Within', 'Feedforward', 'Feedback', 'Ambiguous'};
+    latentClass.acrossDelay = acrossDelay;
+    latentClass.acrossIdx = acrossIdx;
+    latentClass.feedforwardIdx = ffIdx;
+    latentClass.feedbackIdx = fbIdx;
+    latentClass.ambiguousIdx = ambiguousAll;
+end
+
+
+function categoryMasks = makeDlagCategoryMasks(localDim, xDim_across, ffIdx, fbIdx, ambiguousIdx)
+
+    acrossMask = false(1, localDim);
+    acrossMask(1:xDim_across) = true;
+
+    withinMask = false(1, localDim);
+    withinMask(xDim_across+1:end) = true;
+
+    ffMask = false(1, localDim);
+    ffMask(ffIdx) = true;
+
+    fbMask = false(1, localDim);
+    fbMask(fbIdx) = true;
+
+    ambMask = false(1, localDim);
+    ambMask(ambiguousIdx) = true;
+
+    categoryMasks = {acrossMask, withinMask, ffMask, fbMask, ambMask};
+end
+
+
+function keepMask = getDslKeepMask(DSL, fieldName, groupIdx, localDim, defaultKeepValue)
+
+    if nargin < 5
+        defaultKeepValue = true;
+    end
+
+    if isfield(DSL, fieldName) && ~isempty(DSL.(fieldName)) && numel(DSL.(fieldName)) >= groupIdx && ...
+            ~isempty(DSL.(fieldName){groupIdx})
+        keepMask = reshape(DSL.(fieldName){groupIdx}, 1, []) ~= 0;
+    else
+        keepMask = repmat(logical(defaultKeepValue), 1, localDim);
+    end
+
+    if numel(keepMask) ~= localDim
+        error('DSL.%s{%d} has wrong length. Expected %d, got %d.', ...
+            fieldName, groupIdx, localDim, numel(keepMask));
+    end
+end
+
+
+function S = computeCategorySummaryFromRaw(rawLatByCondition, keepMask, categoryMasks, labels)
+
+    numConditions = size(rawLatByCondition, 1);
+    numCategories = numel(labels);
+
+    rawByCondition = nan(numConditions, numCategories);
+    fractionByCondition = nan(numConditions, numCategories);
+    percentByCondition = nan(numConditions, numCategories);
+    totalByCondition = nan(numConditions, 1);
+
+    keepMask = reshape(keepMask, 1, []) ~= 0;
+
+    for condID = 1:numConditions
+        rawLat = rawLatByCondition(condID, :);
+        denom = sum(rawLat(keepMask), 'omitnan');
+        totalByCondition(condID) = denom;
+
+        if ~(denom > 0)
+            continue;
+        end
+
+        for k = 1:numCategories
+            mask = keepMask & categoryMasks{k};
+            rawByCondition(condID, k) = sum(rawLat(mask), 'omitnan');
+            fractionByCondition(condID, k) = rawByCondition(condID, k) / denom;
+            percentByCondition(condID, k) = 100 * rawByCondition(condID, k) / denom;
+        end
+    end
+
+    S = struct();
+    S.labels = labels;
+    S.rawByConditionId = rawByCondition;
+    S.fractionByConditionId = fractionByCondition;
+    S.percentByConditionId = percentByCondition;
+    S.totalByConditionId = totalByCondition;
 end
 
 
@@ -1516,6 +1435,60 @@ function saveOneFigure(figHandle, folderPath, baseName)
 end
 
 
+function saveAndCloseFigure(figHandle, folderPath, baseName)
+    if isempty(figHandle) || ~isgraphics(figHandle)
+        return;
+    end
+
+    saveOneFigure(figHandle, folderPath, baseName);
+    close(figHandle);
+end
+
+
+function saveFigureVector(figHandles, folderPath, filenamePattern)
+    if isempty(figHandles)
+        return;
+    end
+
+    for g = 1:numel(figHandles)
+        saveAndCloseFigure(figHandles(g), folderPath, sprintf(filenamePattern, g));
+    end
+end
+
+
+function saveCategoryFigureSet(figStruct, folderPath, fieldPatterns)
+    if isempty(figStruct)
+        return;
+    end
+
+    fieldsToSave = fieldnames(fieldPatterns);
+    allFigureFields = {'allLatentPct', 'allSharedVarPct', 'filteredLatentPct', 'filteredSharedVarPct', ...
+        'allTrialsDSLfilteredSharedVarPct', 'stimDirDSLfilteredSharedVarPct', ...
+        'stimNameDirDSLfilteredSharedVarPct', 'conditionDSLfilteredSharedVarPct', ...
+        'DSLfilteredSharedVarPct'};
+
+    for g = 1:numel(figStruct)
+        for f = 1:numel(fieldsToSave)
+            fieldName = fieldsToSave{f};
+            if isfield(figStruct(g), fieldName)
+                saveAndCloseFigure(figStruct(g).(fieldName), folderPath, sprintf(fieldPatterns.(fieldName), g));
+            end
+        end
+
+        % Close any extra figures generated by the same struct but not saved under this config.
+        for f = 1:numel(allFigureFields)
+            fieldName = allFigureFields{f};
+            if isfield(figStruct(g), fieldName)
+                figHandle = figStruct(g).(fieldName);
+                if ~isempty(figHandle) && isgraphics(figHandle)
+                    close(figHandle);
+                end
+            end
+        end
+    end
+end
+
+
 function [SummaryDSL, figHandles] = summarizeAllConditionsDSL(AllConditionResults, DSL_threshold)
 
     if isempty(AllConditionResults)
@@ -1707,7 +1680,7 @@ function [SummaryCategory, figHandles] = summarizeAllConditionsCategories(AllCon
         SummaryCategory.group(g).filtered.stim_dir(2).counts = filt_dir2_counts;
         SummaryCategory.group(g).filtered.stim_dir(2).sharedVariance = filt_dir2_sharedVariance;
 
-        figHandles(g).allLatentPct = plotGroupedConditionBarFigureSplitByDir( ...
+        figHandles(g).allLatentPct = plotSplitDirGroupedBar( ...
             all_dir1_percentLatents, all_dir2_percentLatents, ...
             labels, SummaryCategory.meta.panelConditionShortLabels, ...
             SummaryCategory.meta.stimDirPanelTitles, ...
@@ -1715,7 +1688,7 @@ function [SummaryCategory, figHandles] = summarizeAllConditionsCategories(AllCon
             'Latent category', ...
             'Percentage of latents (%)');
 
-        figHandles(g).allSharedVarPct = plotGroupedConditionBarFigureSplitByDir( ...
+        figHandles(g).allSharedVarPct = plotSplitDirGroupedBar( ...
             all_dir1_percentSharedVar, all_dir2_percentSharedVar, ...
             labels, SummaryCategory.meta.panelConditionShortLabels, ...
             SummaryCategory.meta.stimDirPanelTitles, ...
@@ -1723,7 +1696,7 @@ function [SummaryCategory, figHandles] = summarizeAllConditionsCategories(AllCon
             'Latent category', ...
             'Percentage of shared variance explained (%)');
 
-        figHandles(g).filteredLatentPct = plotGroupedConditionBarFigureSplitByDir( ...
+        figHandles(g).filteredLatentPct = plotSplitDirGroupedBar( ...
             filt_dir1_percentLatents, filt_dir2_percentLatents, ...
             labels, SummaryCategory.meta.panelConditionShortLabels, ...
             SummaryCategory.meta.stimDirPanelTitles, ...
@@ -1731,7 +1704,7 @@ function [SummaryCategory, figHandles] = summarizeAllConditionsCategories(AllCon
             'Latent category', ...
             'Percentage of latents (%)');
 
-        figHandles(g).filteredSharedVarPct = plotGroupedConditionBarFigureSplitByDir( ...
+        figHandles(g).filteredSharedVarPct = plotSplitDirGroupedBar( ...
             filt_dir1_percentSharedVar, filt_dir2_percentSharedVar, ...
             labels, SummaryCategory.meta.panelConditionShortLabels, ...
             SummaryCategory.meta.stimDirPanelTitles, ...
@@ -2021,27 +1994,12 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
     % -------------------------------------------------------------
     % Latent category classification
     % -------------------------------------------------------------
-    acrossDelay = gp_params.delays;
-
-    ambiguousIdxs = unique(ambiguousIdxs(:)');
-    ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
-
-    acrossIdx = 1:xDim_across;
-    zeroOrNaNIdx = acrossIdx((acrossDelay == 0) | isnan(acrossDelay));
-    ambiguousAll = unique([ambiguousIdxs, zeroOrNaNIdx]);
-
-    ffIdx = find(acrossDelay > 0);
-    fbIdx = find(acrossDelay < 0);
-    ffIdx = setdiff(ffIdx, ambiguousAll);
-    fbIdx = setdiff(fbIdx, ambiguousAll);
-
-    coveredAcross = unique([ffIdx, fbIdx, ambiguousAll]);
-    missingAcross = setdiff(acrossIdx, coveredAcross);
-    if ~isempty(missingAcross)
-        ambiguousAll = unique([ambiguousAll, missingAcross]);
-    end
-
-    categoryLabels = {'Across', 'Within', 'Feedforward', 'Feedback', 'Ambiguous'};
+    latentClass = classifyDlagLatents(xDim_across, gp_params, ambiguousIdxs);
+    acrossDelay = latentClass.acrossDelay;
+    ffIdx = latentClass.feedforwardIdx;
+    fbIdx = latentClass.feedbackIdx;
+    ambiguousAll = latentClass.ambiguousIdx;
+    categoryLabels = latentClass.categoryLabels;
 
     % -------------------------------------------------------------
     % Block indices for group rows/cols
@@ -2138,44 +2096,14 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
         CondSV.group(g).pooledPosterior.modelDifferencePercent = ...
             pooledPct - 100 * model_varexp_indiv{g};
 
-        % Category masks
-        acrossMask = false(1, localDim);
-        acrossMask(1:xDim_across) = true;
-
-        withinMask = false(1, localDim);
-        withinMask(xDim_across+1:end) = true;
-
-        ffMask = false(1, localDim);
-        ffMask(ffIdx) = true;
-
-        fbMask = false(1, localDim);
-        fbMask(fbIdx) = true;
-
-        ambMask = false(1, localDim);
-        ambMask(ambiguousAll) = true;
-
-        categoryMasks = {acrossMask, withinMask, ffMask, fbMask, ambMask};
+        % Category masks and DSL keep masks
+        categoryMasks = makeDlagCategoryMasks(localDim, xDim_across, ffIdx, fbIdx, ambiguousAll);
 
         keepAll = true(1, localDim);
-        keepDSL = reshape(DSL.logical{g}, 1, []) ~= 0;
-
-        if isfield(DSL, 'logical_bystimdir') && ~isempty(DSL.logical_bystimdir)
-            keepDSLByStimDir = reshape(DSL.logical_bystimdir{g}, 1, []) ~= 0;
-        else
-            keepDSLByStimDir = true(1, localDim);
-        end
-
-        if isfield(DSL, 'logical_bystimnamedir') && ~isempty(DSL.logical_bystimnamedir)
-            keepDSLByStimNameDir = reshape(DSL.logical_bystimnamedir{g}, 1, []) ~= 0;
-        else
-            keepDSLByStimNameDir = true(1, localDim);
-        end
-
-        if isfield(DSL, 'logical_bycondition') && ~isempty(DSL.logical_bycondition)
-            keepDSLByCondition = reshape(DSL.logical_bycondition{g}, 1, []) ~= 0;
-        else
-            keepDSLByCondition = true(1, localDim);
-        end
+        keepDSL = getDslKeepMask(DSL, 'logical', g, localDim, true);
+        keepDSLByStimDir = getDslKeepMask(DSL, 'logical_bystimdir', g, localDim, true);
+        keepDSLByStimNameDir = getDslKeepMask(DSL, 'logical_bystimnamedir', g, localDim, true);
+        keepDSLByCondition = getDslKeepMask(DSL, 'logical_bycondition', g, localDim, true);
 
         % ---------------------------------------------------------
         % Per-condition latent raw / fraction / percent
@@ -2286,28 +2214,12 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
             modeName = modeConfigs(mi).name;
             keepMask = modeConfigs(mi).keepMask;
 
-            catRawByCondition = nan(numAllConditions, numel(categoryLabels));
-            catFracByCondition = nan(numAllConditions, numel(categoryLabels));
-            catPctByCondition = nan(numAllConditions, numel(categoryLabels));
-            catTotalByCondition = nan(numAllConditions, 1);
+            catSummary = computeCategorySummaryFromRaw(rawLatByCondition, keepMask, categoryMasks, categoryLabels);
 
-            for condID = 1:numAllConditions
-                rawLat = rawLatByCondition(condID, :);
-
-                denom = sum(rawLat(keepMask), 'omitnan');
-                catTotalByCondition(condID) = denom;
-
-                if ~(denom > 0)
-                    continue;
-                end
-
-                for k = 1:numel(categoryLabels)
-                    mask = keepMask & categoryMasks{k};
-                    catRawByCondition(condID, k) = sum(rawLat(mask), 'omitnan');
-                    catFracByCondition(condID, k) = catRawByCondition(condID, k) / denom;
-                    catPctByCondition(condID, k) = 100 * catRawByCondition(condID, k) / denom;
-                end
-            end
+            catRawByCondition = catSummary.rawByConditionId;
+            catFracByCondition = catSummary.fractionByConditionId;
+            catPctByCondition = catSummary.percentByConditionId;
+            catTotalByCondition = catSummary.totalByConditionId;
 
             CondSV.group(g).category.(modeName).displayName = modeConfigs(mi).displayName;
             CondSV.group(g).category.(modeName).figureFieldName = modeConfigs(mi).figField;
@@ -2355,7 +2267,7 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
                 fieldName = plotModeConfigs(mi).fieldName;
                 displayName = plotModeConfigs(mi).displayName;
 
-                figHandles(g).(fieldName) = condsv_plotCategoryFigureSplitByDir( ...
+                figHandles(g).(fieldName) = plotSplitDirGroupedBar( ...
                     CondSV.group(g).category.(modeName).stim_dir(1).percentSharedVariance, ...
                     CondSV.group(g).category.(modeName).stim_dir(2).percentSharedVariance, ...
                     categoryLabels, panelConditionShortLabels, ...
@@ -2374,46 +2286,11 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
 end
 
 
-function figHandle = condsv_plotCategoryFigureSplitByDir(valuesDir1, valuesDir2, labels, legendLabels, panelTitles, figTitle, xlab, ylab, condColors)
+function figHandle = plotSplitDirGroupedBar(valuesDir1, valuesDir2, labels, legendLabels, panelTitles, figTitle, xlab, ylab, condColors)
 
-    figHandle = figure('Position', [100 100 1500 820]);
-    tl = tiledlayout(figHandle, 1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
-
-    ax1 = nexttile(tl, 1);
-    b1 = bar(ax1, valuesDir1');
-    condsv_setGroupedBarColors(b1, condColors);
-    set(ax1, 'XTick', 1:numel(labels), 'XTickLabel', labels);
-    xtickangle(ax1, 30);
-    xlabel(ax1, xlab);
-    ylabel(ax1, ylab);
-    title(ax1, panelTitles{1});
-
-    ax2 = nexttile(tl, 2);
-    b2 = bar(ax2, valuesDir2');
-    condsv_setGroupedBarColors(b2, condColors);
-    set(ax2, 'XTick', 1:numel(labels), 'XTickLabel', labels);
-    xtickangle(ax2, 30);
-    xlabel(ax2, xlab);
-    ylabel(ax2, ylab);
-    title(ax2, panelTitles{2});
-
-    ymax = condsv_computeFlexibleYMax([valuesDir1(:); valuesDir2(:)]);
-    ylim(ax1, [0 ymax]);
-    ylim(ax2, [0 ymax]);
-
-    lgd = legend(ax1, b1, legendLabels, ...
-        'Location', 'southoutside', ...
-        'Orientation', 'horizontal');
-    lgd.NumColumns = 4;
-    lgd.Layout.Tile = 'south';
-
-    sgtitle(tl, figTitle);
-end
-
-
-function figHandle = plotGroupedConditionBarFigureSplitByDir(valuesDir1, valuesDir2, labels, legendLabels, panelTitles, figTitle, xlab, ylab)
-
-    condColors = condsv_getConditionColors(numel(legendLabels));
+    if nargin < 9 || isempty(condColors)
+        condColors = condsv_getConditionColors(numel(legendLabels));
+    end
 
     figHandle = figure('Position', [100 100 1500 820]);
     tl = tiledlayout(figHandle, 1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
