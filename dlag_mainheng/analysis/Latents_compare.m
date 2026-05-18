@@ -1134,7 +1134,7 @@ function [Stats, figHandles] = summarizeLatentCategories(varexp_indiv, xDim_acro
     end
 
     
-    acrossDelay = resolveAcrossDelay(gp_params, xDim_across);
+    acrossDelay = gp_params.delays;
 
     ambiguousIdxs = unique(ambiguousIdxs(:)');
     ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
@@ -1292,40 +1292,6 @@ function figHandle = plotOneBarFigure(values, labels, figTitle, xlab, ylab)
     ylim([0, max(100, max(values) * 1.1 + eps)]);
 end
 
-
-
-function acrossDelay = resolveAcrossDelay(delays, xDim_across)
-    if isvector(delays)
-        acrossDelay = reshape(delays, 1, []);
-        if numel(acrossDelay) ~= xDim_across
-            error('Delay vector length must equal xDim_across.');
-        end
-        return;
-    end
-
-    sz = size(delays);
-
-    if numel(sz) ~= 2
-        error('Delay input must be a vector or a 2D matrix.');
-    end
-
-    if sz(2) == xDim_across
-        if sz(1) == 1
-            acrossDelay = delays(1, :);
-        else
-            acrossDelay = delays(end, :) - delays(1, :);
-        end
-        return;
-    end
-
-    if sz(1) == xDim_across && sz(2) == 1
-        acrossDelay = delays(:, 1)';
-        return;
-    end
-
-    error(['Delay input has incompatible size. Expected a vector of length xDim_across ' ...
-           'or a matrix with xDim_across columns.']);
-end
 
 
 function [figHandle, histStat] = plotDSLHistogram(values, DSL_threshold, figTitle)
@@ -2055,7 +2021,7 @@ function [CondSV, figHandles] = analyzeConditionSpecificPosteriorVarExpFromPoole
     % -------------------------------------------------------------
     % Latent category classification
     % -------------------------------------------------------------
-    acrossDelay = resolveAcrossDelay(gp_params, xDim_across);
+    acrossDelay = gp_params.delays;
 
     ambiguousIdxs = unique(ambiguousIdxs(:)');
     ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);

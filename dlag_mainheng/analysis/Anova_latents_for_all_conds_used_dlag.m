@@ -17,7 +17,7 @@ fprintf('Reading from %s \n', dat_file);
 load(dat_file);
 
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-data_content = 'raw_count';
+data_content = 'z_across_conditions';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
@@ -178,7 +178,7 @@ function Results = analyze_dlag_latents_by_condition(condition_full, seqEst, xDi
     % ---------------------------------------------------------------------
     % Across-latent category labels
     % ---------------------------------------------------------------------
-    acrossDelay = resolve_across_delay(gp_params, xDim_across);
+    acrossDelay = gp_params.delays;
     acrossCategory = classify_across_latents(acrossDelay, ambiguousIdxs, xDim_across);
 
     % ---------------------------------------------------------------------
@@ -449,42 +449,6 @@ function trialMeta = build_trial_metadata(condition_full, seqEst)
     trialMeta.condLabels = condLabels;
     trialMeta.condShortLabels = condShortLabels;
     trialMeta.barX = barX;
-end
-
-% =========================================================================
-% Determine one signed delay value per across latent
-% =========================================================================
-function acrossDelay = resolve_across_delay(gp_params, xDim_across)
-    if isstruct(gp_params)
-        if isfield(gp_params, 'delays')
-            delays = gp_params.delays;
-        elseif isfield(gp_params, 'DelayMatrix')
-            delays = gp_params.DelayMatrix;
-        else
-            error('gp_params must contain field delays or DelayMatrix.');
-        end
-    else
-        delays = gp_params;
-    end
-
-    if isvector(delays)
-        acrossDelay = reshape(delays, 1, []);
-        if numel(acrossDelay) ~= xDim_across
-            error('Delay vector length must equal xDim_across.');
-        end
-        return;
-    end
-
-    if ismatrix(delays) && size(delays, 2) == xDim_across
-        if size(delays, 1) == 1
-            acrossDelay = delays(1, :);
-        else
-            acrossDelay = delays(end, :) - delays(1, :);
-        end
-        return;
-    end
-
-    error('Unable to resolve across-latent delays from gp_params.delays.');
 end
 
 % =========================================================================
@@ -1353,7 +1317,7 @@ function Results = analyze_dlag_latents_by_condition_split_by_dir(condition_full
     % ---------------------------------------------------------------------
     % Across-latent category labels
     % ---------------------------------------------------------------------
-    acrossDelay    = dirsplit_resolve_across_delay(gp_params, xDim_across);
+    acrossDelay    = gp_params.delays;
     acrossCategory = dirsplit_classify_across_latents(acrossDelay, ambiguousIdxs, xDim_across);
 
     % ---------------------------------------------------------------------
@@ -1734,42 +1698,6 @@ function trialMeta = dirsplit_build_trial_metadata(condition_full, seqEst)
     trialMeta.condLabels = condLabels;
     trialMeta.condShortLabels = condShortLabels;
     trialMeta.barX = barX;
-end
-
-% =========================================================================
-% Determine one signed delay value per across latent
-% =========================================================================
-function acrossDelay = dirsplit_resolve_across_delay(gp_params, xDim_across)
-    if isstruct(gp_params)
-        if isfield(gp_params, 'delays')
-            delays = gp_params.delays;
-        elseif isfield(gp_params, 'DelayMatrix')
-            delays = gp_params.DelayMatrix;
-        else
-            error('gp_params must contain field delays or DelayMatrix.');
-        end
-    else
-        delays = gp_params;
-    end
-
-    if isvector(delays)
-        acrossDelay = reshape(delays, 1, []);
-        if numel(acrossDelay) ~= xDim_across
-            error('Delay vector length must equal xDim_across.');
-        end
-        return;
-    end
-
-    if ismatrix(delays) && size(delays, 2) == xDim_across
-        if size(delays, 1) == 1
-            acrossDelay = delays(1, :);
-        else
-            acrossDelay = delays(end, :) - delays(1, :);
-        end
-        return;
-    end
-
-    error('Unable to resolve across-latent delays from gp_params.delays.');
 end
 
 % =========================================================================
