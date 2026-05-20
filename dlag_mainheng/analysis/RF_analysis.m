@@ -3,8 +3,9 @@
 %
 % Purpose:
 %   First-step RF analysis based on bined_data_allruns.mat.
+%   Optional second-step target overlay analysis based on model_data_allruns.
 %
-%   This script:
+%   Step 1:
 %     1. Finds the RF run in bined_data_allruns by rf_stim_tag.
 %     2. Sums raw_count across bins to get one response per unit per trial.
 %     3. Reconstructs trial-wise xPos, yPos, and stimsize from conditions.
@@ -13,23 +14,32 @@
 %     6. Plots RF maps sorted by descending depth.
 %     7. Saves unit_rf_results.mat and unit_rf_map_depth_desc.png.
 %
+%   Step 2, only if target_stim_tag is not empty:
+%     1. Loads model_data_allruns.
+%     2. Finds the target run by target_stim_tag.
+%     3. Extracts target stimulus x/y/size combinations.
+%     4. Extracts target-selected unit ids for each probe.
+%     5. Keeps units that are both selected in target run and pass RF R2 threshold.
+%     6. Plots per-probe RF fit centers/sizes over target stimulus layout.
+%     7. Plots combined probe-average RF over target stimulus layout.
+%     8. Saves target summary mat in cat folder.
+%
 % Required input in each kilosort folder:
 %   - bined_data_allruns.mat
 %
-% Expected RF run fields in bined_data_allruns{r}:
-%   - stim_tag
-%   - unit_ids
-%   - raw_count
-%   - condition_index_per_trial
-%   - conditions
-%   - optionally unit_depth_um
-%   - optionally unit_channel
+% Optional input for Step 2:
+%   - model_data_allruns.mat
 %
 % Main output saved in each kilosort folder:
 %   - unit_rf_results.mat
 %   - unit_rf_map_depth_desc.png
+%   - unit_rf_target_overlay_<target_safe_name>.png, if target_stim_tag is not empty
 %
-% Output variable:
+% Target output saved in cat folder:
+%   - unit_rf_target_summary_<target_safe_name>.mat
+%   - unit_rf_target_combined_<target_safe_name>.png
+%
+% Output variable in unit_rf_results.mat:
 %   unit_rf.rf_stim_tag
 %   unit_rf.unit_ids
 %   unit_rf.unit_depth_um
@@ -46,10 +56,11 @@
 %   unit_rf.fit.size
 %   unit_rf.fit.rsquare
 %   unit_rf.fit.params
+%   unit_rf.plot.depth_desc_order
 %
 % Notes:
-%   1. raw_count is assumed to be unit x trial x bin.
-%   2. RF response is defined as sum(raw_count, 3).
+%   1. raw_count can be unit x trial x bin, or unit x trial if only one bin.
+%   2. RF response is defined as sum(raw_count, 3), or raw_count itself for single-bin data.
 %   3. RF map collapses across any non-position condition dimensions.
 %      For example, if ori is also present, trials with the same xPos/yPos
 %      are averaged together regardless of ori.
@@ -69,26 +80,103 @@ addpath(genpath(fullfile('.', 'utils')));
 root_folder = 'I:\np_data';
 runName     = 'RafiL001p0120';
 runind      = 1;          % run index after -g
-probes      = [0];      % probe indices after -prb
+probes      = [0,1];      % probe indices after -prb
 
 % RF run used for computing unit RF.
 rf_stim_tag = '[RFG_coarse2dg_99_4_150isi]';
 
-% Target run reserved for later step.
-% This script does not use target_stim_tag yet.
-target_stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]'; %#ok<NASGU>
+% Target run for Step 2.
+% If [], Step 2 is skipped completely.
+target_stim_tag =  '_2[Gpl2_2c_2sz_400_2_200isi]';
 
-% Output names.
+% model_data_allruns file for Step 2.
+% Only used when target_stim_tag is not empty.
+dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\model_data_allruns.mat';
+
+% RF R2 threshold for Step 2.
+RF_R2_threshold = 0.5;
+
+% If target conditions do not contain a size/stimsize field, this default
+% value will be used. Keep [] to force an error when target size is missing.
+target_default_stimsize = [];
+
+% Output names for Step 1.
 rf_mat_name = 'unit_rf_results.mat';
 rf_png_name = 'unit_rf_map_depth_desc.png';
 
+% Probe colors for Step 2.
+% Row 1 is probe 0, row 2 is probe 1.
+probe_colors = [
+    0.0000, 0.4470, 0.7410;
+    0.8500, 0.3250, 0.0980
+];
+
 %% ----------------------- Build shared session paths -----------------------
 
-run_g   = sprintf('%s_g%d', runName, runind);
-destDir = fullfile(root_folder, run_g);
+run_g      = sprintf('%s_g%d', runName, runind);
+destDir    = fullfile(root_folder, run_g);
+cat_folder = fullfile(destDir, ['catgt_' run_g]);
 
-fprintf('destDir : %s\n', destDir);
+fprintf('destDir    : %s\n', destDir);
+fprintf('cat_folder : %s\n', cat_folder);
 fprintf('RF stim tag: %s\n', rf_stim_tag);
+
+%% ----------------------- Optional Step 2 setup -----------------------
+
+target_enabled = ~isempty(target_stim_tag);
+
+if target_enabled
+
+    fprintf('\nTarget analysis enabled.\n');
+    fprintf('Target stim tag: %s\n', target_stim_tag);
+    fprintf('Reading from %s\n', dat_file);
+
+    M = load(dat_file, 'model_data_allruns');
+
+    if ~isfield(M, 'model_data_allruns')
+        error('model_data_allruns not found in %s', dat_file);
+    end
+
+    model_data_allruns = M.model_data_allruns;
+
+    all_run_tags = get_all_run_tags(model_data_allruns);
+    target_run_idx = find(strcmp(all_run_tags, target_stim_tag));
+
+    if isempty(target_run_idx)
+        error('Requested target_stim_tag not found: %s', target_stim_tag);
+    end
+
+    if numel(target_run_idx) > 1
+        error('Duplicate target_stim_tag found: %s', target_stim_tag);
+    end
+
+    target_run = model_data_allruns{target_run_idx};
+
+    target_stimulus_xy_size = extract_target_stimulus_xy_size( ...
+        target_run, target_default_stimsize);
+
+    target_safe_name = make_filename_safe(target_stim_tag);
+
+    target_rf_summary = struct();
+    target_rf_summary.rf_stim_tag = rf_stim_tag;
+    target_rf_summary.target_stim_tag = target_stim_tag;
+    target_rf_summary.target_safe_name = target_safe_name;
+    target_rf_summary.RF_R2_threshold = RF_R2_threshold;
+    target_rf_summary.model_data_file = dat_file;
+    target_rf_summary.target_run_idx = target_run_idx;
+    target_rf_summary.target_stimulus_xy_size = target_stimulus_xy_size;
+    target_rf_summary.probe = [];
+
+else
+
+    fprintf('\nTarget analysis disabled because target_stim_tag is empty.\n');
+
+    target_run = [];
+    target_stimulus_xy_size = [];
+    target_safe_name = '';
+    target_rf_summary = [];
+
+end
 
 %% ----------------------- Process each probe folder -----------------------
 
@@ -97,7 +185,7 @@ for ip = 1:numel(probes)
     thisProbe = probes(ip);
     imecStr   = sprintf('imec%d', thisProbe);
 
-    probe_folder = fullfile(destDir, ['catgt_' run_g], [run_g '_' imecStr]);
+    probe_folder = fullfile(cat_folder, [run_g '_' imecStr]);
 
     fprintf('\n============================================================\n');
     fprintf('Processing probe %d\n', thisProbe);
@@ -161,6 +249,8 @@ for ip = 1:numel(probes)
 
             rf_data = bined_data_allruns{rf_idx};
 
+            %% ----------------------- Step 1: compute RF -----------------------
+
             unit_rf = compute_unit_rf_from_bined_run(rf_data, rf_stim_tag);
 
             mat_file = fullfile(ksDir, rf_mat_name);
@@ -170,15 +260,68 @@ for ip = 1:numel(probes)
 
             plot_rf_map_depth_desc(unit_rf, png_file);
 
-            fprintf('Saved:\n');
+            fprintf('Saved Step 1:\n');
             fprintf('  %s\n', mat_file);
             fprintf('  %s\n', png_file);
+
+            %% ----------------------- Step 2: target overlay -----------------------
+
+            if target_enabled
+
+ target_result = compute_target_rf_result( ...
+    unit_rf, target_run, thisProbe, ksDir, ...
+    target_stimulus_xy_size, RF_R2_threshold);
+
+target_png_name = sprintf('unit_rf_target_overlay_%s.png', target_safe_name);
+target_png_file = fullfile(ksDir, target_png_name);
+
+this_color = get_probe_color(thisProbe, probe_colors);
+
+plot_target_rf_overlay_per_probe( ...
+    target_stimulus_xy_size, ...
+    target_result.good_center, ...
+    target_result.good_size, ...
+    this_color, ...
+    target_png_file, ...
+    sprintf('probe %d, target %s', thisProbe, target_stim_tag));
+
+target_result.target_overlay_png = target_png_file;
+
+if isempty(target_rf_summary.probe)
+    target_rf_summary.probe = target_result;
+else
+    target_rf_summary.probe(end+1) = target_result; %#ok<SAGROW>
+end
+
+fprintf('Saved Step 2 per-probe overlay:\n');
+fprintf('  %s\n', target_png_file);
+            end
 
         catch ME
             fprintf(2, 'Error in probe %d, ksDir %s\n', thisProbe, ksDir);
             fprintf(2, '%s\n', ME.message);
         end
     end
+end
+
+%% ----------------------- Save Step 2 cat-folder outputs -----------------------
+
+if target_enabled
+
+    target_mat_name = sprintf('unit_rf_target_summary_%s.mat', target_safe_name);
+    target_mat_file = fullfile(cat_folder, target_mat_name);
+
+    target_combined_png_name = sprintf('unit_rf_target_combined_%s.png', target_safe_name);
+    target_combined_png_file = fullfile(cat_folder, target_combined_png_name);
+
+    save(target_mat_file, 'target_rf_summary');
+
+    plot_target_rf_combined( ...
+        target_rf_summary, probe_colors, target_combined_png_file);
+
+    fprintf('\nSaved Step 2 cat-folder outputs:\n');
+    fprintf('  %s\n', target_mat_file);
+    fprintf('  %s\n', target_combined_png_file);
 end
 
 fprintf('\nDone.\n');
@@ -237,13 +380,6 @@ function unit_rf = compute_unit_rf_from_bined_run(rf_data, rf_stim_tag)
         error('numel(unit_ids) does not match size(raw_count,1).');
     end
 
-    % ---------------------------------------------------------------------
-    % Convert raw_count to one response per unit per trial.
-    %
-    % If raw_count is unit x trial x bin, sum over bins.
-    % If raw_count is unit x trial, it already represents the single-bin
-    % response count per trial.
-    % ---------------------------------------------------------------------
     if ismatrix(raw_count)
         response_count_trial = raw_count;
     else
@@ -287,7 +423,10 @@ function unit_rf = compute_unit_rf_from_bined_run(rf_data, rf_stim_tag)
     unit_rf.rfstimsize = rfstimsize;
 
     unit_rf.fit = fit_results;
+
+    unit_rf.plot.depth_desc_order = get_depth_desc_order(unit_depth_um, nUnit);
 end
+
 function validate_rf_bined_data(rf_data)
 %% =========================================================================
 % Validate required fields for RF analysis.
@@ -320,7 +459,6 @@ function validate_rf_bined_data(rf_data)
     end
 end
 
-
 function v = get_optional_unit_vector(rf_data, field_name, nUnit)
 %% =========================================================================
 % Read an optional unit-level vector from rf_data.
@@ -343,10 +481,6 @@ end
 function [xPos_trial, yPos_trial, stimsize_trial] = get_trial_position_from_conditions(conditions, condition_index_per_trial, nTrial)
 %% =========================================================================
 % Reconstruct trial-wise xPos, yPos, and stimsize from condition definitions.
-%
-% This function intentionally uses only x position, y position, and stimulus
-% size. Other condition fields, for example ori, are ignored for RF map
-% grouping later.
 % =========================================================================
 
     condition_index_per_trial = condition_index_per_trial(:);
@@ -479,9 +613,6 @@ function [RFmap, unique_x, unique_y] = compute_rf_map(response_count_trial, xPos
 % Compute one-eye RF map:
 %
 %   RFmap(unit, y, x) = mean response_count_trial(unit, trials at x/y)
-%
-% This follows the old get_RFmap1eye logic, but uses unit responses from
-% bined_data_allruns.
 % =========================================================================
 
     [nUnit, nTrial] = size(response_count_trial);
@@ -514,26 +645,8 @@ function [RFmap, unique_x, unique_y] = compute_rf_map(response_count_trial, xPos
             take_xy = take_x & yPos_trial == unique_y(y);
 
             if any(take_xy)
-                RFmap(:, y, x) = mean_omitnan_dim2(response_count_trial(:, take_xy));
+                RFmap(:, y, x) = mean(response_count_trial(:, take_xy), 2, 'omitnan');
             end
-        end
-    end
-end
-
-function m = mean_omitnan_dim2(A)
-%% =========================================================================
-% Mean over columns, ignoring NaN, without requiring nanmean.
-% =========================================================================
-
-    nRow = size(A, 1);
-    m = nan(nRow, 1);
-
-    for i = 1:nRow
-        v = A(i, :);
-        v = v(isfinite(v));
-
-        if ~isempty(v)
-            m(i) = mean(v);
         end
     end
 end
@@ -542,12 +655,6 @@ function results = fitGaussianHeatmaps(data, xc, yc, stimsize)
 %% =========================================================================
 % Fit 2D Gaussians to RF heatmaps.
 %
-% Inputs:
-%   data     : N x Y x X RF maps
-%   xc       : X x 1 or 1 x X vector of x coordinates
-%   yc       : Y x 1 or 1 x Y vector of y coordinates
-%   stimsize : scalar stimulus size
-%
 % Output:
 %   results.center  : N x 2 [x0, y0]
 %   results.size    : N x 2 [r95_x, r95_y]
@@ -555,9 +662,9 @@ function results = fitGaussianHeatmaps(data, xc, yc, stimsize)
 %   results.params  : N x 6 [amp, x0, y0, sx, sy, offset]
 %
 % Notes:
-%   This is the no-plot version of the old fitGaussianHeatmaps logic.
-%   If lsqcurvefit is available, bounded least-squares is used.
-%   If lsqcurvefit is unavailable, fminsearch is used as a fallback.
+%   Apply a heuristic lower bound on corrected RF sigma.
+%   This lower bound is set to stimsize/4, so the minimum reported
+%   95% RF width is approximately one stimulus size.
 % =========================================================================
 
     if nargin < 4
@@ -586,7 +693,9 @@ function results = fitGaussianHeatmaps(data, xc, yc, stimsize)
     results.rsquare = nan(N, 1);
     results.params = nan(N, 6);
 
-gauss2d = @(p,xy) p(1).*exp(-(((xy(:,1)-p(2)).^2)/(2*p(4)^2) + ((xy(:,2)-p(3)).^2)/(2*p(5)^2))) + p(6);
+    gauss2d = @(p,xy) p(1).*exp(-(((xy(:,1)-p(2)).^2)/(2*p(4)^2) + ...
+                                  ((xy(:,2)-p(3)).^2)/(2*p(5)^2))) + p(6);
+
     eps_sigma = 1e-3;
 
     has_lsqcurvefit = exist('lsqcurvefit', 'file') == 2;
@@ -689,8 +798,8 @@ gauss2d = @(p,xy) p(1).*exp(-(((xy(:,1)-p(2)).^2)/(2*p(4)^2) + ((xy(:,2)-p(3)).^
         sxr = sqrt(max(p(4)^2 - varK, 0));
         syr = sqrt(max(p(5)^2 - varK, 0));
 
-        sx = max(sxr, stimsize / 2);
-        sy = max(syr, stimsize / 2);
+        sx = max(sxr, stimsize / 4);
+        sy = max(syr, stimsize / 4);
 
         r95 = 2 * 1.96 * [sx, sy];
 
@@ -755,16 +864,13 @@ function plot_rf_map_depth_desc(unit_rf, png_file)
 %% =========================================================================
 % Plot RF maps sorted by descending unit_depth_um.
 %
-% Same depth is sorted by original unit index.
-% Missing depth is placed at the end in original unit order.
+% This version builds one RGB mosaic image directly and saves it with imwrite.
 % =========================================================================
 
     RFmap = unit_rf.rfs.map;
-    unit_ids = unit_rf.unit_ids(:);
     unit_depth_um = unit_rf.unit_depth_um(:);
-    unit_channel = unit_rf.unit_channel(:);
 
-    nUnit = numel(unit_ids);
+    nUnit = numel(unit_rf.unit_ids);
 
     if size(RFmap, 1) ~= nUnit
         error('size(unit_rf.rfs.map,1) does not match numel(unit_rf.unit_ids).');
@@ -772,50 +878,99 @@ function plot_rf_map_depth_desc(unit_rf, png_file)
 
     order = get_depth_desc_order(unit_depth_um, nUnit);
 
-    nCols = ceil(sqrt(nUnit));
+    tile_scale = 5;
+    gap_pix = 1;
+    margin_pix = 6;
+
+    nCols = ceil(sqrt(nUnit * 1.25));
     nRows = ceil(nUnit / nCols);
 
-    fig = figure('Visible', 'off', ...
-                 'Color', 'w', ...
-                 'Position', [100 100 1800 1400]);
+    [~, nY, nX] = size(RFmap);
 
-    colormap(parula);
+    tile_h = nY * tile_scale;
+    tile_w = nX * tile_scale;
+
+    img_h = 2 * margin_pix + nRows * tile_h + (nRows - 1) * gap_pix;
+    img_w = 2 * margin_pix + nCols * tile_w + (nCols - 1) * gap_pix;
+
+    mosaic_rgb = ones(img_h, img_w, 3);
+
+    cmap = parula(256);
 
     for ii = 1:nUnit
 
         u = order(ii);
 
-        subplot(nRows, nCols, ii);
+        row = floor((ii - 1) / nCols) + 1;
+        col = mod(ii - 1, nCols) + 1;
+
+        y0 = margin_pix + (row - 1) * (tile_h + gap_pix) + 1;
+        x0 = margin_pix + (col - 1) * (tile_w + gap_pix) + 1;
+
+        yidx = y0:(y0 + tile_h - 1);
+        xidx = x0:(x0 + tile_w - 1);
 
         Z = squeeze(RFmap(u, :, :));
+        Z = flipud(Z);
 
-        imagesc(flipud(Z));
+        tile_rgb = rf_tile_to_rgb(Z, cmap, tile_scale);
 
-        axis equal tight;
-        axis off;
-
-        title_str = sprintf('idx=%d id=%g d=%.1f ch=%.0f', ...
-            u, unit_ids(u), unit_depth_um(u), unit_channel(u));
-
-        title(title_str, ...
-            'Interpreter', 'none', ...
-            'FontSize', 5);
+        mosaic_rgb(yidx, xidx, :) = tile_rgb;
     end
 
-    if exist('sgtitle', 'file') == 2
-        sgtitle(sprintf('RF maps sorted by descending depth: %s', unit_rf.rf_stim_tag), ...
-            'Interpreter', 'none');
+    imwrite(mosaic_rgb, png_file);
+end
+
+function tile_rgb = rf_tile_to_rgb(Z, cmap, tile_scale)
+%% =========================================================================
+% Convert one RF map to an RGB tile.
+% Each unit is scaled independently, similar to using imagesc separately.
+% =========================================================================
+
+    finite_mask = isfinite(Z);
+
+    tile_h = size(Z, 1) * tile_scale;
+    tile_w = size(Z, 2) * tile_scale;
+
+    tile_rgb = ones(tile_h, tile_w, 3);
+
+    if ~any(finite_mask(:))
+        return;
     end
 
-    set(fig, 'PaperPositionMode', 'auto');
+    zmin = min(Z(finite_mask));
+    zmax = max(Z(finite_mask));
 
-    try
-        print(fig, png_file, '-dpng', '-r200');
-    catch
-        saveas(fig, png_file);
+    if zmax > zmin
+        Zn = (Z - zmin) ./ (zmax - zmin);
+    else
+        if zmax == 0
+            Zn = zeros(size(Z));
+        else
+            Zn = 0.5 * ones(size(Z));
+        end
     end
 
-    close(fig);
+    Zn(~finite_mask) = NaN;
+
+    idx = round(Zn * 255) + 1;
+    idx(idx < 1) = 1;
+    idx(idx > 256) = 256;
+
+    rgb_small = ones(size(Z,1), size(Z,2), 3);
+
+    for yy = 1:size(Z,1)
+        for xx = 1:size(Z,2)
+
+            if isfinite(idx(yy,xx))
+                rgb_small(yy,xx,:) = reshape(cmap(idx(yy,xx), :), [1 1 3]);
+            else
+                rgb_small(yy,xx,:) = [1 1 1];
+            end
+        end
+    end
+
+    tile_rgb = repelem(rgb_small, tile_scale, tile_scale, 1);
 end
 
 function order = get_depth_desc_order(unit_depth_um, nUnit)
@@ -850,4 +1005,687 @@ function order = get_depth_desc_order(unit_depth_um, nUnit)
     nan_order = unit_index(~finite_depth);
 
     order = [finite_order; nan_order];
+end
+
+%% ======================= Step 2 functions =======================
+
+function target_result = compute_target_rf_result(unit_rf, target_run, probe_id, ksDir, target_stimulus_xy_size, RF_R2_threshold)
+%% =========================================================================
+% Compute per-probe target overlay result.
+% Keeps units that:
+%   1. are used by target model run for this probe
+%   2. have RF fit R2 >= threshold
+%   3. have finite RF center and size
+% =========================================================================
+
+    selected_unit_ids = get_selected_unit_ids_for_probe(target_run, probe_id);
+
+    r2 = unit_rf.fit.rsquare(:);
+    center = unit_rf.fit.center;
+    rf_size = unit_rf.fit.size;
+    unit_ids = unit_rf.unit_ids(:);
+
+    in_target = ismember(unit_ids, selected_unit_ids(:));
+
+    finite_fit = isfinite(r2) ...
+              & all(isfinite(center), 2) ...
+              & all(isfinite(rf_size), 2);
+
+    good = in_target & finite_fit & (r2 >= RF_R2_threshold);
+
+    good_idx = find(good);
+
+    good_center = center(good_idx, :);
+    good_size = rf_size(good_idx, :);
+    good_rsquared = r2(good_idx);
+    good_unit_ids = unit_ids(good_idx);
+
+    if isempty(good_idx)
+        mean_center = [NaN NaN];
+        mean_size = [NaN NaN];
+    else
+        mean_center = mean(good_center, 1, 'omitnan');
+        mean_size = mean(good_size, 1, 'omitnan');
+    end
+
+    target_result = struct();
+
+    target_result.probe_id = probe_id;
+    target_result.ksDir = ksDir;
+
+    target_result.selected_unit_ids = selected_unit_ids(:);
+    target_result.RF_R2_threshold = RF_R2_threshold;
+
+    target_result.good_unit_idx = good_idx;
+    target_result.good_unit_ids = good_unit_ids;
+    target_result.good_center = good_center;
+    target_result.good_size = good_size;
+    target_result.good_rsquared = good_rsquared;
+
+    target_result.mean_center = mean_center;
+    target_result.mean_size = mean_size;
+
+    target_result.target_stimulus_xy_size = target_stimulus_xy_size;
+    target_result.target_overlay_png = '';
+end
+
+function selected_unit_ids = get_selected_unit_ids_for_probe(target_run, probe_id)
+%% =========================================================================
+% Dynamically extract selected unit ids for the current probe.
+%
+% Expected field examples:
+%   probe0_usedunit_ids
+%   probe1_usedunit_ids
+% =========================================================================
+
+    field_name = sprintf('probe%d_usedunit_ids', probe_id);
+
+    if ~isfield(target_run, field_name)
+        error('Target run does not contain field: %s', field_name);
+    end
+
+    selected_unit_ids = target_run.(field_name);
+    selected_unit_ids = selected_unit_ids(:);
+end
+
+function target_stimulus_xy_size = extract_target_stimulus_xy_size(target_run, target_default_stimsize)
+%% =========================================================================
+% Extract unique target stimulus [x, y, size] combinations from target run.
+%
+% Field lookup:
+%   x    : centerX, xPos, x
+%   y    : centerY, yPos, y
+%   size : size, stimsize
+%
+% If size field is missing, target_default_stimsize is used if non-empty.
+% =========================================================================
+
+    conditions = get_target_conditions(target_run);
+
+    x_field = find_field_case_insensitive(conditions, ...
+        {'centerX', 'center_x', 'xPos', 'xpos', 'x_pos', 'x'});
+
+    y_field = find_field_case_insensitive(conditions, ...
+        {'centerY', 'center_y', 'yPos', 'ypos', 'y_pos', 'y'});
+
+    size_field = find_field_case_insensitive(conditions, ...
+        {'size', 'stimsize', 'stim_size', 'stimSize'});
+
+    if isempty(x_field)
+        error('No x-position field found in target run conditions.');
+    end
+
+    if isempty(y_field)
+        error('No y-position field found in target run conditions.');
+    end
+
+    if isempty(size_field) && isempty(target_default_stimsize)
+        error(['No size/stimsize field found in target run conditions, and ' ...
+               'target_default_stimsize is empty.']);
+    end
+
+    nCond = numel(conditions);
+    xyzs = nan(nCond, 3);
+
+    for c = 1:nCond
+        xyzs(c, 1) = get_numeric_scalar_from_struct(conditions(c), x_field);
+        xyzs(c, 2) = get_numeric_scalar_from_struct(conditions(c), y_field);
+
+        if isempty(size_field)
+            xyzs(c, 3) = target_default_stimsize;
+        else
+            xyzs(c, 3) = get_numeric_scalar_from_struct(conditions(c), size_field);
+        end
+    end
+
+    good = all(isfinite(xyzs), 2);
+
+    if ~any(good)
+        error('No finite target stimulus [x, y, size] combinations found.');
+    end
+
+    target_stimulus_xy_size = unique(xyzs(good, :), 'rows');
+end
+
+function conditions = get_target_conditions(target_run)
+%% =========================================================================
+% Get condition structure from model_data_allruns target run.
+% Prefer full conditions when available.
+% =========================================================================
+
+    if isfield(target_run, 'conditions_full')
+        conditions = target_run.conditions_full;
+    elseif isfield(target_run, 'conditions')
+        conditions = target_run.conditions;
+    else
+        error('Target run does not contain conditions_full or conditions.');
+    end
+
+    if ~isstruct(conditions)
+        error('Target run conditions must be a struct array.');
+    end
+end
+
+function plot_target_rf_overlay_per_probe(target_stimulus_xy_size, centers, sizes, probe_color, png_file, plot_title)
+%% =========================================================================
+% Plot target stimuli and individual unit RF fit errorbar-like crosses.
+% =========================================================================
+
+    fig = figure('Visible', 'off', ...
+                 'Color', 'w', ...
+                 'Position', [100 100 850 800]);
+
+    ax = axes('Parent', fig);
+    hold(ax, 'on');
+
+    draw_target_stimulus_circles(ax, target_stimulus_xy_size);
+
+    draw_rf_errorbars(ax, centers, sizes, probe_color, 1.1);
+
+    axis(ax, 'equal');
+box(ax, 'off');
+grid(ax, 'off');
+
+xlabel(ax, '');
+ylabel(ax, '');
+
+    title(ax, plot_title, 'Interpreter', 'none');
+
+    set_overlay_axis_limits(ax, target_stimulus_xy_size, centers, sizes);
+
+    format_rf_overlay_axis(ax);
+
+    save_figure_png(fig, png_file, 200);
+
+    close(fig);
+end
+
+function plot_target_rf_combined(target_rf_summary, probe_colors, png_file)
+%% =========================================================================
+% Plot target stimuli and probe-average RF ellipses.
+% =========================================================================
+
+    fig = figure('Visible', 'off', ...
+                 'Color', 'w', ...
+                 'Position', [100 100 850 800]);
+
+    ax = axes('Parent', fig);
+    hold(ax, 'on');
+
+    target_stimulus_xy_size = target_rf_summary.target_stimulus_xy_size;
+
+    draw_target_stimulus_circles(ax, target_stimulus_xy_size);
+
+    all_centers = [];
+    all_sizes = [];
+
+    for i = 1:numel(target_rf_summary.probe)
+
+        probe_id = target_rf_summary.probe(i).probe_id;
+        probe_color = get_probe_color(probe_id, probe_colors);
+
+        mean_center = target_rf_summary.probe(i).mean_center;
+        mean_size = target_rf_summary.probe(i).mean_size;
+
+        if all(isfinite(mean_center)) && all(isfinite(mean_size))
+            draw_rf_ellipse(ax, mean_center, mean_size, probe_color, 2.2);
+            plot(ax, mean_center(1), mean_center(2), 'o', ...
+                'MarkerFaceColor', probe_color, ...
+                'MarkerEdgeColor', probe_color, ...
+                'MarkerSize', 5);
+
+            all_centers = [all_centers; mean_center]; %#ok<AGROW>
+            all_sizes = [all_sizes; mean_size]; %#ok<AGROW>
+        end
+    end
+
+    axis(ax, 'equal');
+box(ax, 'off');
+grid(ax, 'off');
+
+xlabel(ax, '');
+ylabel(ax, '');
+
+    title(ax, sprintf('Probe-average RF over target: %s', target_rf_summary.target_stim_tag), ...
+        'Interpreter', 'none');
+
+    set_overlay_axis_limits(ax, target_stimulus_xy_size, all_centers, all_sizes);
+
+    format_rf_overlay_axis(ax);
+
+    save_figure_png(fig, png_file, 200);
+
+    close(fig);
+end
+function draw_target_stimulus_circles(ax, target_stimulus_xy_size)
+%% =========================================================================
+% Draw target stimuli as filled circles.
+% Smaller stimulus is darker; larger stimulus is lighter.
+% Larger circles are drawn first so smaller circles remain visible.
+% =========================================================================
+
+    if isempty(target_stimulus_xy_size)
+        return;
+    end
+
+    x = target_stimulus_xy_size(:,1);
+    y = target_stimulus_xy_size(:,2);
+    s = target_stimulus_xy_size(:,3);
+
+    [~, order] = sort(s, 'descend');
+
+    s_min = min(s);
+    s_max = max(s);
+
+    theta = linspace(0, 2*pi, 80);
+
+    for ii = 1:numel(order)
+
+        k = order(ii);
+
+        cx = x(k);
+        cy = y(k);
+        r = s(k) / 2;
+
+        if s_max > s_min
+            gray = 0.15 + 0.60 * (s(k) - s_min) / (s_max - s_min);
+        else
+            gray = 0.45;
+        end
+
+        xx = cx + r * cos(theta);
+        yy = cy + r * sin(theta);
+
+        patch(ax, xx, yy, gray * [1 1 1], ...
+            'EdgeColor', 'none', ...
+            'FaceAlpha', 0.75);
+    end
+end
+
+function draw_rf_errorbars(ax, centers, sizes, color_value, line_width)
+%% =========================================================================
+% Draw RF fit centers and x/y full-width sizes as errorbar-like crosses.
+% size(:,1) is full x width, size(:,2) is full y width.
+% =========================================================================
+
+    if isempty(centers)
+        return;
+    end
+
+    for i = 1:size(centers, 1)
+
+        c = centers(i, :);
+        sz = sizes(i, :);
+
+        if ~all(isfinite(c)) || ~all(isfinite(sz))
+            continue;
+        end
+
+        hx = sz(1) / 2;
+        hy = sz(2) / 2;
+
+        line(ax, [c(1) - hx, c(1) + hx], [c(2), c(2)], ...
+            'Color', color_value, ...
+            'LineWidth', line_width);
+
+        line(ax, [c(1), c(1)], [c(2) - hy, c(2) + hy], ...
+            'Color', color_value, ...
+            'LineWidth', line_width);
+    end
+end
+
+function draw_rf_ellipse(ax, center, rf_size, color_value, line_width)
+%% =========================================================================
+% Draw one RF ellipse using full x/y width.
+% =========================================================================
+
+    theta = linspace(0, 2*pi, 160);
+
+    rx = rf_size(1) / 2;
+    ry = rf_size(2) / 2;
+
+    x = center(1) + rx * cos(theta);
+    y = center(2) + ry * sin(theta);
+
+    line(ax, x, y, ...
+        'Color', color_value, ...
+        'LineWidth', line_width);
+end
+
+function set_overlay_axis_limits(ax, target_stimulus_xy_size, centers, sizes)
+%% =========================================================================
+% Set axis limits to include target circles and RF overlays.
+% =========================================================================
+
+    xs = [];
+    ys = [];
+
+    if ~isempty(target_stimulus_xy_size)
+        x = target_stimulus_xy_size(:,1);
+        y = target_stimulus_xy_size(:,2);
+        s = target_stimulus_xy_size(:,3);
+
+        xs = [xs; x - s/2; x + s/2]; %#ok<AGROW>
+        ys = [ys; y - s/2; y + s/2]; %#ok<AGROW>
+    end
+
+    if ~isempty(centers)
+        good = all(isfinite(centers), 2) & all(isfinite(sizes), 2);
+
+        if any(good)
+            c = centers(good, :);
+            sz = sizes(good, :);
+
+            xs = [xs; c(:,1) - sz(:,1)/2; c(:,1) + sz(:,1)/2]; %#ok<AGROW>
+            ys = [ys; c(:,2) - sz(:,2)/2; c(:,2) + sz(:,2)/2]; %#ok<AGROW>
+        end
+    end
+
+    xs = xs(isfinite(xs));
+    ys = ys(isfinite(ys));
+
+    if isempty(xs) || isempty(ys)
+        return;
+    end
+
+    xmin = min(xs);
+    xmax = max(xs);
+    ymin = min(ys);
+    ymax = max(ys);
+
+    xrange = xmax - xmin;
+    yrange = ymax - ymin;
+
+    if xrange == 0
+        xrange = 1;
+    end
+
+    if yrange == 0
+        yrange = 1;
+    end
+
+    pad = 0.08 * max(xrange, yrange);
+
+    xlim(ax, [xmin - pad, xmax + pad]);
+    ylim(ax, [ymin - pad, ymax + pad]);
+end
+
+function save_figure_png(fig, png_file, dpi)
+%% =========================================================================
+% Save figure to PNG.
+% =========================================================================
+
+    drawnow;
+
+    try
+        if exist('exportgraphics', 'file') == 2
+            exportgraphics(fig, png_file, ...
+                'Resolution', dpi, ...
+                'BackgroundColor', 'white');
+        else
+            set(fig, 'PaperPositionMode', 'auto');
+            print(fig, png_file, '-dpng', sprintf('-r%d', dpi));
+        end
+    catch
+        saveas(fig, png_file);
+    end
+end
+
+function color_value = get_probe_color(probe_id, probe_colors)
+%% =========================================================================
+% Get plotting color for probe id.
+% probe_id 0 uses row 1, probe_id 1 uses row 2, etc.
+% =========================================================================
+
+    row = probe_id + 1;
+
+    if row >= 1 && row <= size(probe_colors, 1)
+        color_value = probe_colors(row, :);
+    else
+        color_value = [0 0 0];
+    end
+end
+
+function safe_name = make_filename_safe(s)
+%% =========================================================================
+% Convert stim tag to safe filename component.
+% =========================================================================
+
+    s = char(s);
+
+    safe_name = regexprep(s, '[^A-Za-z0-9_-]', '_');
+    safe_name = regexprep(safe_name, '_+', '_');
+    safe_name = regexprep(safe_name, '^_+', '');
+    safe_name = regexprep(safe_name, '_+$', '');
+
+    if isempty(safe_name)
+        safe_name = 'target_run';
+    end
+
+    max_len = 80;
+
+    if numel(safe_name) > max_len
+        safe_name = safe_name(1:max_len);
+    end
+end
+
+function all_tags = get_all_run_tags(model_data_allruns)
+%% =========================================================================
+% Extract all stim_tag values from model_data_allruns.
+% =========================================================================
+
+    all_tags = cell(numel(model_data_allruns), 1);
+
+    for j = 1:numel(model_data_allruns)
+        if ~isfield(model_data_allruns{j}, 'stim_tag')
+            error('stim_tag missing in model_data_allruns{%d}.', j);
+        end
+        all_tags{j} = model_data_allruns{j}.stim_tag;
+    end
+end
+
+function format_rf_overlay_axis(ax)
+%% =========================================================================
+% Format overlay plot like a visual-field/RF plot.
+%
+% This version:
+%   1. Removes the outer box and default edge axes.
+%   2. Uses y=0 as HM, horizontal meridian.
+%   3. Uses x=0 as VM, vertical meridian.
+%   4. Adds ruler-like tick marks and numeric labels.
+%   5. Adds a 2 deg scale bar.
+% =========================================================================
+
+    hold(ax, 'on');
+
+    xl = xlim(ax);
+    yl = ylim(ax);
+
+    xrange = xl(2) - xl(1);
+    yrange = yl(2) - yl(1);
+
+    box(ax, 'off');
+    grid(ax, 'off');
+
+    set(ax, ...
+        'XColor', 'none', ...
+        'YColor', 'none', ...
+        'FontSize', 11, ...
+        'LineWidth', 1);
+
+    xlabel(ax, '');
+    ylabel(ax, '');
+
+    axis_color = [0 0 0];
+    axis_lw = 2.4;          % 主轴粗细
+    tick_lw = 1.4;          % 卡尺刻度粗细
+    tick_len_frac = 0.018;  % 刻度长度
+    label_font = 9;
+
+    has_HM = yl(1) <= 0 && yl(2) >= 0;  % y = 0
+    has_VM = xl(1) <= 0 && xl(2) >= 0;  % x = 0
+
+    % ---------------------------------------------------------------------
+    % Draw HM and VM.
+    % ---------------------------------------------------------------------
+    if has_HM
+        line(ax, xl, [0 0], ...
+            'Color', axis_color, ...
+            'LineStyle', '-', ...
+            'LineWidth', axis_lw);
+    end
+
+    if has_VM
+        line(ax, [0 0], yl, ...
+            'Color', axis_color, ...
+            'LineStyle', '-', ...
+            'LineWidth', axis_lw);
+    end
+
+    xlim(ax, xl);
+    ylim(ax, yl);
+
+    % ---------------------------------------------------------------------
+    % Ruler ticks.
+    % tick_step = 2 means one tick every 2 deg.
+    % ---------------------------------------------------------------------
+    tick_step = 2;
+
+    if has_HM
+        xticks_internal = ceil(xl(1) / tick_step) * tick_step : tick_step : floor(xl(2) / tick_step) * tick_step;
+        xticks_internal = xticks_internal(abs(xticks_internal) > 1e-9);
+
+        tick_len_y = tick_len_frac * yrange;
+
+        for i = 1:numel(xticks_internal)
+            x = xticks_internal(i);
+
+            line(ax, [x x], [-tick_len_y tick_len_y], ...
+                'Color', axis_color, ...
+                'LineWidth', tick_lw);
+
+            text(ax, x, -2.3 * tick_len_y, ...
+                sprintf('%g', x), ...
+                'HorizontalAlignment', 'center', ...
+                'VerticalAlignment', 'top', ...
+                'FontSize', label_font, ...
+                'Color', axis_color);
+        end
+    end
+
+    if has_VM
+        yticks_internal = ceil(yl(1) / tick_step) * tick_step : tick_step : floor(yl(2) / tick_step) * tick_step;
+        yticks_internal = yticks_internal(abs(yticks_internal) > 1e-9);
+
+        tick_len_x = tick_len_frac * xrange;
+
+        for i = 1:numel(yticks_internal)
+            y = yticks_internal(i);
+
+            line(ax, [-tick_len_x tick_len_x], [y y], ...
+                'Color', axis_color, ...
+                'LineWidth', tick_lw);
+
+            text(ax, -2.0 * tick_len_x, y, ...
+                sprintf('%g', y), ...
+                'HorizontalAlignment', 'right', ...
+                'VerticalAlignment', 'middle', ...
+                'FontSize', label_font, ...
+                'Color', axis_color);
+        end
+    end
+
+    % ---------------------------------------------------------------------
+    % Meridian labels.
+    % ---------------------------------------------------------------------
+    if has_HM
+        text(ax, xl(2) - 0.02 * xrange, 0 + 0.04 * yrange, ...
+            'HM', ...
+            'HorizontalAlignment', 'right', ...
+            'VerticalAlignment', 'bottom', ...
+            'FontSize', 13, ...
+            'FontWeight', 'bold', ...
+            'Color', axis_color);
+    end
+
+    if has_VM
+        text(ax, 0 + 0.035 * xrange, yl(2) - 0.02 * yrange, ...
+            'VM', ...
+            'HorizontalAlignment', 'left', ...
+            'VerticalAlignment', 'top', ...
+            'FontSize', 13, ...
+            'FontWeight', 'bold', ...
+            'Color', axis_color);
+    end
+
+    if has_HM && has_VM
+        text(ax, 0 + 0.02 * xrange, 0 - 0.035 * yrange, ...
+            '0', ...
+            'HorizontalAlignment', 'left', ...
+            'VerticalAlignment', 'top', ...
+            'FontSize', label_font, ...
+            'Color', axis_color);
+    end
+
+    draw_scale_bar_deg(ax, 2);
+end
+
+function draw_scale_bar_deg(ax, scale_len)
+%% =========================================================================
+% Draw a horizontal scale bar in degree units.
+%
+% This version places the scale bar farther left to avoid overlap with
+% VM tick marks.
+% =========================================================================
+
+    xl = xlim(ax);
+    yl = ylim(ax);
+
+    xrange = xl(2) - xl(1);
+    yrange = yl(2) - yl(1);
+
+    if xrange <= 0 || yrange <= 0
+        return;
+    end
+
+    % Put scale bar lower-left.
+    y0 = yl(1) + 0.075 * yrange;
+
+    % Prefer placing it clearly on the left side of VM if x=0 is visible.
+    if xl(1) < 0 && xl(2) > 0
+        x0 = xl(1) + 0.025 * xrange;
+
+        % Make sure the right end is not too close to VM.
+        right_margin_from_VM = 0.08 * xrange;
+        if x0 + scale_len > -right_margin_from_VM
+            x0 = -right_margin_from_VM - scale_len;
+        end
+
+        % If this pushes it outside the plot, fall back to near left edge.
+        if x0 < xl(1) + 0.01 * xrange
+            x0 = xl(1) + 0.025 * xrange;
+        end
+    else
+        x0 = xl(1) + 0.025 * xrange;
+    end
+
+    % If the scale bar exceeds the right edge, pull it back.
+    if x0 + scale_len > xl(2) - 0.04 * xrange
+        x0 = xl(2) - scale_len - 0.08 * xrange;
+    end
+
+    if x0 < xl(1) || x0 + scale_len > xl(2)
+        return;
+    end
+
+    line(ax, [x0, x0 + scale_len], [y0, y0], ...
+        'Color', 'k', ...
+        'LineWidth', 2.2);
+
+    text(ax, x0 + scale_len / 2, y0 - 0.035 * yrange, ...
+        sprintf('%g deg', scale_len), ...
+        'HorizontalAlignment', 'center', ...
+        'VerticalAlignment', 'top', ...
+        'FontSize', 11, ...
+        'Color', 'k');
 end
