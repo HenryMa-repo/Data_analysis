@@ -1,19 +1,21 @@
 %% subspace_similarity_dlag.m
 % Compute within-group DLAG subspace principal angles and subspace overlap.
 %
-% This version adds:
-%   1) File names indicate latent selection mode:
-%        subspace_similarity_all_latents.mat
-%        subspace_similarity_DSL_<dsl_field>_filtered.mat
-%   2) The saved SubspaceSim no longer contains SubspaceSim.meta,
-%      use_dsl_filter, or dsl_field.
-%   3) In condition mode, all requested conditions are summarized after the
-%      loop. The summary mat keeps the same top-level structure as the
-%      single-condition result:
-%        SubspaceSim.classification
-%        SubspaceSim.group
-%      but scalar values are expanded across conditions.
-%   4) Human-readable wide tables are printed and saved with two header rows.
+% This version supports two optional latent filters:
+%   1) DSL filter from Latents_compare.m
+%   2) Shared variance explained filter from pick_latents_by_svexp.m
+%
+% Filter convention:
+%   1 = keep, 0 = remove
+%
+% If both filters are enabled, the final keep mask is their intersection:
+%   final keep = DSL keep & SVExp keep
+%
+% File names indicate latent selection mode, for example:
+%   subspace_similarity_all_latents.mat
+%   subspace_similarity_DSL_logical_filtered.mat
+%   subspace_similarity_SVExp_threshold0p95_logical_filtered.mat
+%   subspace_similarity_DSL_logical_filtered_and_SVExp_threshold0p95_logical_filtered.mat
 %
 % For every neural group, this computes:
 %   1) across subspace vs within subspace
@@ -21,13 +23,13 @@
 %
 % Subspace overlap formula:
 %   S(U,V) = 1 - ||(I - U*(U'*U)^(-1)*U')*V||_F / ||V||_F
+%
 % This is directional, so both S(A,B) and S(B,A) are computed.
 %
 % A captures B means B lies in A; equivalently, B projects little to A's
 % null space.
 
-clc;
-clear;
+clc; clear;
 
 % -------------------------------------------------------------------------
 % User parameters
@@ -38,16 +40,26 @@ data_content = 'z_across_conditions';
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
 % demean_pooledsd_within_condition
 
-data_condition = [1:16];
-% [] for pooled all-condition mode, or e.g. 1:16 for condition mode
-
+data_condition = [1:16];   % [] for pooled all-condition mode, or e.g. 1:16
 runIdx = 1;
 
 % Whether to remove latents marked as DSL-remove by Latents_compare.m.
 % If true, this script loads DSL_and_latent_category_stats.mat from each
 % model folder and uses DSL.(dsl_field){groupIdx} as the keep mask.
 use_dsl_filter = false;
-dsl_field = 'logical';
+dsl_field = 'logical';     % options usually include 'rawlogical' or 'logical'
+
+% Whether to remove latents not selected by pick_latents_by_svexp.m.
+% If true, this script loads SVExpFilter_threshold*.mat from each model
+% folder and uses SVExpFilter.(svexp_field){groupIdx} as the keep mask.
+use_svexp_filter = true;
+svexp_field = 'logical';   % options: 'rawlogical' or 'logical'
+
+% Must match the threshold used in pick_latents_by_svexp.m.
+% The expected input file is:
+%   SVExpFilter_threshold0p95.mat when shared_varexp_threshold = 0.95
+shared_varexp_threshold = 0.95;
+svexp_file_name = ['SVExpFilter_', thresholdTagLocal(shared_varexp_threshold), '.mat'];
 
 % Stimulus metadata. Used only when data_condition is not empty, to make
 % short condition labels such as G-S-L, G-L-H, P-S-L, etc.
@@ -77,8 +89,10 @@ else
     numConditions = numel(condition_list);
 end
 
-latentSelectionTag = makeLatentSelectionTagLocal(use_dsl_filter, dsl_field);
-latentSelectionDisplay = makeLatentSelectionDisplayLocal(use_dsl_filter, dsl_field);
+latentSelectionTag = makeLatentSelectionTagLocal( ...
+    use_dsl_filter, dsl_field, use_svexp_filter, svexp_field, shared_varexp_threshold);
+latentSelectionDisplay = makeLatentSelectionDisplayLocal( ...
+    use_dsl_filter, dsl_field, use_svexp_filter, svexp_field, shared_varexp_threshold);
 
 condition_full = [];
 stim_abbrev = cell(1, numConditions);
@@ -102,6 +116,7 @@ if use_condition_mode
     if ~isfield(model_data_allruns{run_idx}, 'conditions_full')
         error('model_data_allruns{%d} is missing conditions_full.', run_idx);
     end
+
     condition_full = model_data_allruns{run_idx}.conditions_full;
     conditionMap = buildConditionSummaryMapLocal(condition_full, condition_list);
     stim_abbrev = {conditionMap.entries.panelCondShortLabel};
@@ -137,6 +152,7 @@ for cond_i = 1:numConditions
 
     bestFile = findOneFileLocal(tempfname, 'bestmodel*', true);
     Sbest = load(bestFile);
+
     requiredBestVars = {'bestModel', 'res'};
     for v = 1:numel(requiredBestVars)
         if ~isfield(Sbest, requiredBestVars{v})
@@ -179,11 +195,29 @@ for cond_i = 1:numConditions
         DSL = Sdsl.DSL;
     end
 
+    SVExpFilter = [];
+    if use_svexp_filter
+        svexpFile = fullfile(tempfname, svexp_file_name);
+        if ~exist(svexpFile, 'file')
+            error(['use_svexp_filter=true, but %s was not found. ', ...
+                   'Run pick_latents_by_svexp.m first or set use_svexp_filter=false.'], svexpFile);
+        end
+        Ssv = load(svexpFile, 'SVExpFilter');
+        if ~isfield(Ssv, 'SVExpFilter')
+            error('%s does not contain SVExpFilter.', svexpFile);
+        end
+        SVExpFilter = Ssv.SVExpFilter;
+        checkSVExpThresholdLocal(SVExpFilter, shared_varexp_threshold, svexpFile);
+    end
+
     opts = struct();
     opts.use_dsl_filter = use_dsl_filter;
     opts.dsl_field = dsl_field;
+    opts.use_svexp_filter = use_svexp_filter;
+    opts.svexp_field = svexp_field;
 
-    SubspaceSim = computeDlagSubspaceSimilarityLocal(bestModel, params, gp_params, ambiguousIdxs, DSL, opts);
+    SubspaceSim = computeDlagSubspaceSimilarityLocal( ...
+        bestModel, params, gp_params, ambiguousIdxs, DSL, SVExpFilter, opts);
 
     if print_single_model_verbose
         printSubspaceSimilarityResultsLocal(SubspaceSim);
@@ -207,6 +241,7 @@ end
 % -------------------------------------------------------------------------
 if use_condition_mode
     SubspaceSim = buildConditionSummarySubspaceSimLocal(AllSubspaceSim, condition_list, stim_abbrev);
+
     if save_results
         summaryMat = fullfile(summary_output_dir, sprintf( ...
             '%s_condition_mode_subspace_similarity_%s.mat', ...
@@ -257,8 +292,10 @@ else
 
         if save_summary_tables && save_results
             pooledDir = AllConditionInfo(1).tempfname;
-            txtFile = fullfile(pooledDir, sprintf('subspace_similarity_table_pooled_all_condition_mode_%s.txt', latentSelectionTag));
-            csvFile = fullfile(pooledDir, sprintf('subspace_similarity_table_pooled_all_condition_mode_%s.csv', latentSelectionTag));
+            txtFile = fullfile(pooledDir, sprintf( ...
+                'subspace_similarity_table_pooled_all_condition_mode_%s.txt', latentSelectionTag));
+            csvFile = fullfile(pooledDir, sprintf( ...
+                'subspace_similarity_table_pooled_all_condition_mode_%s.csv', latentSelectionTag));
             saveTableTextAndCsvLocal(tableCell, txtFile, csvFile, titleStr, [3 9 11]);
         end
     end
@@ -268,854 +305,992 @@ end
 % Local functions
 %% ========================================================================
 
-function SubspaceSim = computeDlagSubspaceSimilarityLocal(bestModel, params, gp_params, ambiguousIdxs, DSL, opts)
-    if ~isfield(params, 'C')
-        error('params must contain loading matrix C.');
+function SubspaceSim = computeDlagSubspaceSimilarityLocal(bestModel, params, gp_params, ambiguousIdxs, DSL, SVExpFilter, opts)
+
+if ~isfield(params, 'C')
+    error('params must contain loading matrix C.');
+end
+
+if isfield(bestModel, 'xDim_across')
+    xDim_across = bestModel.xDim_across;
+elseif isfield(params, 'xDim_across')
+    xDim_across = params.xDim_across;
+else
+    error('Could not find xDim_across in bestModel or params.');
+end
+
+if isfield(bestModel, 'xDim_within')
+    xDim_within = bestModel.xDim_within;
+elseif isfield(params, 'xDim_within')
+    xDim_within = params.xDim_within;
+else
+    error('Could not find xDim_within in bestModel or params.');
+end
+xDim_within = reshape(xDim_within, 1, []);
+
+if isfield(params, 'yDims')
+    yDims = reshape(params.yDims, 1, []);
+else
+    error('params must contain yDims.');
+end
+
+numGroups = numel(yDims);
+if numel(xDim_within) ~= numGroups
+    error('Length of xDim_within (%d) must match number of groups (%d).', ...
+        numel(xDim_within), numGroups);
+end
+
+localDims = xDim_across + xDim_within;
+
+if size(params.C, 2) ~= sum(localDims)
+    error('params.C has %d columns, expected sum(xDim_across+xDim_within) = %d.', ...
+        size(params.C, 2), sum(localDims));
+end
+if size(params.C, 1) ~= sum(yDims)
+    error('params.C has %d rows, expected sum(yDims) = %d.', ...
+        size(params.C, 1), sum(yDims));
+end
+
+latentClass = classifyDlagLatentsLocal(xDim_across, params, gp_params, ambiguousIdxs);
+
+SubspaceSim = struct();
+SubspaceSim.classification = latentClass;
+
+obsStart = cumsum([1, yDims(1:end-1)]);
+obsEnd = cumsum(yDims);
+latStart = cumsum([1, localDims(1:end-1)]);
+latEnd = cumsum(localDims);
+
+for g = 1:numGroups
+    obsIdx = obsStart(g):obsEnd(g);
+    latIdx = latStart(g):latEnd(g);
+    Cg = params.C(obsIdx, latIdx);
+
+    groupKeepMask = true(1, localDims(g));
+    if opts.use_dsl_filter
+        groupKeepMask = groupKeepMask & getDslKeepMaskLocal(DSL, opts.dsl_field, g, localDims(g));
+    end
+    if opts.use_svexp_filter
+        groupKeepMask = groupKeepMask & getSVExpKeepMaskLocal(SVExpFilter, opts.svexp_field, g, localDims(g));
     end
 
-    if isfield(bestModel, 'xDim_across')
-        xDim_across = bestModel.xDim_across;
-    elseif isfield(params, 'xDim_across')
-        xDim_across = params.xDim_across;
-    else
-        error('Could not find xDim_across in bestModel or params.');
-    end
+    acrossLocal = 1:xDim_across;
+    withinLocal = (xDim_across+1):localDims(g);
+    ffLocal = latentClass.feedforwardIdx;
+    fbLocal = latentClass.feedbackIdx;
 
-    if isfield(bestModel, 'xDim_within')
-        xDim_within = bestModel.xDim_within;
-    elseif isfield(params, 'xDim_within')
-        xDim_within = params.xDim_within;
-    else
-        error('Could not find xDim_within in bestModel or params.');
-    end
-    xDim_within = reshape(xDim_within, 1, []);
+    acrossLocal = intersect(acrossLocal, find(groupKeepMask), 'stable');
+    withinLocal = intersect(withinLocal, find(groupKeepMask), 'stable');
+    ffLocal = intersect(ffLocal, find(groupKeepMask), 'stable');
+    fbLocal = intersect(fbLocal, find(groupKeepMask), 'stable');
 
-    if isfield(params, 'yDims')
-        yDims = reshape(params.yDims, 1, []);
-    else
-        error('params must contain yDims.');
-    end
+    SubspaceSim.group(g).name = sprintf('Group %d', g);
 
-    numGroups = numel(yDims);
-    if numel(xDim_within) ~= numGroups
-        error('Length of xDim_within (%d) must match number of groups (%d).', ...
-            numel(xDim_within), numGroups);
-    end
-
-    localDims = xDim_across + xDim_within;
-
-    if size(params.C, 2) ~= sum(localDims)
-        error('params.C has %d columns, expected sum(xDim_across+xDim_within) = %d.', ...
-            size(params.C, 2), sum(localDims));
-    end
-    if size(params.C, 1) ~= sum(yDims)
-        error('params.C has %d rows, expected sum(yDims) = %d.', ...
-            size(params.C, 1), sum(yDims));
-    end
-
-    latentClass = classifyDlagLatentsLocal(xDim_across, params, gp_params, ambiguousIdxs);
-
-    SubspaceSim = struct();
-    SubspaceSim.classification = latentClass;
-
-    obsStart = cumsum([1, yDims(1:end-1)]);
-    obsEnd = cumsum(yDims);
-    latStart = cumsum([1, localDims(1:end-1)]);
-    latEnd = cumsum(localDims);
-
-    for g = 1:numGroups
-        obsIdx = obsStart(g):obsEnd(g);
-        latIdx = latStart(g):latEnd(g);
-        Cg = params.C(obsIdx, latIdx);
-
-        groupKeepMask = true(1, localDims(g));
-        if opts.use_dsl_filter
-            groupKeepMask = getDslKeepMaskLocal(DSL, opts.dsl_field, g, localDims(g));
-        end
-
-        acrossLocal = 1:xDim_across;
-        withinLocal = (xDim_across+1):localDims(g);
-        ffLocal = latentClass.feedforwardIdx;
-        fbLocal = latentClass.feedbackIdx;
-
-        acrossLocal = intersect(acrossLocal, find(groupKeepMask), 'stable');
-        withinLocal = intersect(withinLocal, find(groupKeepMask), 'stable');
-        ffLocal = intersect(ffLocal, find(groupKeepMask), 'stable');
-        fbLocal = intersect(fbLocal, find(groupKeepMask), 'stable');
-
-        SubspaceSim.group(g).name = sprintf('Group %d', g);
-
-        pairSpecs = {
-            'across_vs_within',        'Across',      'Within',   acrossLocal, withinLocal;
-            'feedforward_vs_feedback', 'Feedforward', 'Feedback', ffLocal,     fbLocal
+    pairSpecs = {
+        'across_vs_within', 'Across', 'Within', acrossLocal, withinLocal;
+        'feedforward_vs_feedback', 'Feedforward', 'Feedback', ffLocal, fbLocal
         };
 
-        SubspaceSim.group(g).pairNames = pairSpecs(:, 1)';
-        SubspaceSim.group(g).pair = cell(1, size(pairSpecs, 1));
+    SubspaceSim.group(g).pairNames = pairSpecs(:, 1)';
+    SubspaceSim.group(g).pair = cell(1, size(pairSpecs, 1));
 
-        for p = 1:size(pairSpecs, 1)
-            pairName = pairSpecs{p, 1};
-            labelA = pairSpecs{p, 2};
-            labelB = pairSpecs{p, 3};
-            idxA = pairSpecs{p, 4};
-            idxB = pairSpecs{p, 5};
+    for p = 1:size(pairSpecs, 1)
+        pairName = pairSpecs{p, 1};
+        labelA = pairSpecs{p, 2};
+        labelB = pairSpecs{p, 3};
+        idxA = pairSpecs{p, 4};
+        idxB = pairSpecs{p, 5};
 
-            Araw = Cg(:, idxA);
-            Braw = Cg(:, idxB);
+        Araw = Cg(:, idxA);
+        Braw = Cg(:, idxB);
 
-            pairResult = compareTwoSubspacesLocal(Araw, Braw, labelA, labelB);
-            pairResult.name = pairName;
-            pairResult.labelA = labelA;
-            pairResult.labelB = labelB;
-            pairResult.idxA = idxA;
-            pairResult.idxB = idxB;
-            pairResult.rawDimA = size(Araw, 2);
-            pairResult.rawDimB = size(Braw, 2);
+        pairResult = compareTwoSubspacesLocal(Araw, Braw, labelA, labelB);
+        pairResult.name = pairName;
+        pairResult.labelA = labelA;
+        pairResult.labelB = labelB;
+        pairResult.idxA = idxA;
+        pairResult.idxB = idxB;
+        pairResult.rawDimA = size(Araw, 2);
+        pairResult.rawDimB = size(Braw, 2);
 
-            SubspaceSim.group(g).pair{p} = pairResult;
-        end
+        SubspaceSim.group(g).pair{p} = pairResult;
     end
+end
+
 end
 
 function pairResult = compareTwoSubspacesLocal(Araw, Braw, labelA, labelB)
-    pairResult = struct();
-    pairResult.status = 'ok';
-    pairResult.warning = '';
 
-    QA = dlagSvdBasisLocal(Araw);
-    QB = dlagSvdBasisLocal(Braw);
-    pairResult.basisA = QA;
-    pairResult.basisB = QB;
+pairResult = struct();
+pairResult.status = 'ok';
+pairResult.warning = '';
 
-    captureFieldAB = makeCaptureFieldNameLocal(labelA, labelB);
-    captureFieldBA = makeCaptureFieldNameLocal(labelB, labelA);
+QA = dlagSvdBasisLocal(Araw);
+QB = dlagSvdBasisLocal(Braw);
 
-    if isempty(QA) || isempty(QB) || size(QA, 2) == 0 || size(QB, 2) == 0
-        pairResult.status = 'skipped_empty_subspace';
-        pairResult.warning = sprintf('%s or %s has zero usable dimension.', labelA, labelB);
-        pairResult.principal.cosine = [];
-        pairResult.principal.angle_deg = [];
-        pairResult.principal.first_angle_deg = NaN;
-        pairResult.principal.last_angle_deg = NaN;
-        pairResult.principal.median_angle_deg = NaN;
-        pairResult.similarity.(captureFieldAB) = NaN;
-        pairResult.similarity.(captureFieldBA) = NaN;
-        pairResult.similarity.avg = NaN;
-        return;
-    end
+pairResult.basisA = QA;
+pairResult.basisB = QB;
 
-    % Principal angles: singular values of QA' * QB are principal cosines.
-    s = svd(QA' * QB, 'econ');
-    s = min(max(s, 0), 1);
-    thetaRad = acos(s);
-    thetaDeg = thetaRad * 180 / pi;
+captureFieldAB = makeCaptureFieldNameLocal(labelA, labelB);
+captureFieldBA = makeCaptureFieldNameLocal(labelB, labelA);
 
-    pairResult.principal.cosine = reshape(s, 1, []);
-    pairResult.principal.angle_deg = reshape(thetaDeg, 1, []);
-    pairResult.principal.first_angle_deg = thetaDeg(1);
-    pairResult.principal.last_angle_deg = thetaDeg(end);
-    pairResult.principal.median_angle_deg = median(thetaDeg);
+if isempty(QA) || isempty(QB) || size(QA, 2) == 0 || size(QB, 2) == 0
+    pairResult.status = 'skipped_empty_subspace';
+    pairResult.warning = sprintf('%s or %s has zero usable dimension.', labelA, labelB);
 
-    % Directional subspace overlap. Computed twice because the measure is
-    % not symmetric.
-    pairResult.similarity.(captureFieldAB) = directionalSubspaceOverlapLocal(QA, QB);
-    pairResult.similarity.(captureFieldBA) = directionalSubspaceOverlapLocal(QB, QA);
-    simVals = [pairResult.similarity.(captureFieldAB), pairResult.similarity.(captureFieldBA)];
-    simVals = simVals(~isnan(simVals));
-    if isempty(simVals)
-        pairResult.similarity.avg = NaN;
-    else
-        pairResult.similarity.avg = mean(simVals);
-    end
+    pairResult.principal.cosine = [];
+    pairResult.principal.angle_deg = [];
+    pairResult.principal.first_angle_deg = NaN;
+    pairResult.principal.last_angle_deg = NaN;
+    pairResult.principal.median_angle_deg = NaN;
+
+    pairResult.similarity.(captureFieldAB) = NaN;
+    pairResult.similarity.(captureFieldBA) = NaN;
+    pairResult.similarity.avg = NaN;
+    return;
+end
+
+% Principal angles: singular values of QA' * QB are principal cosines.
+s = svd(QA' * QB, 'econ');
+s = min(max(s, 0), 1);
+thetaRad = acos(s);
+thetaDeg = thetaRad * 180 / pi;
+
+pairResult.principal.cosine = reshape(s, 1, []);
+pairResult.principal.angle_deg = reshape(thetaDeg, 1, []);
+pairResult.principal.first_angle_deg = thetaDeg(1);
+pairResult.principal.last_angle_deg = thetaDeg(end);
+pairResult.principal.median_angle_deg = median(thetaDeg);
+
+% Directional subspace overlap. Computed twice because the measure is not symmetric.
+pairResult.similarity.(captureFieldAB) = directionalSubspaceOverlapLocal(QA, QB);
+pairResult.similarity.(captureFieldBA) = directionalSubspaceOverlapLocal(QB, QA);
+simVals = [pairResult.similarity.(captureFieldAB), pairResult.similarity.(captureFieldBA)];
+simVals = simVals(~isnan(simVals));
+if isempty(simVals)
+    pairResult.similarity.avg = NaN;
+else
+    pairResult.similarity.avg = mean(simVals);
+end
+
 end
 
 function fieldName = makeCaptureFieldNameLocal(labelA, labelB)
-    % Make explicit overlap field names, e.g.:
-    % across_captures_within, within_captures_across,
-    % feedforward_captures_feedback, feedback_captures_feedforward.
-    fieldName = sprintf('%s_captures_%s', normalizeCaptureLabelLocal(labelA), normalizeCaptureLabelLocal(labelB));
+
+% Make explicit overlap field names, e.g.:
+% across_captures_within, within_captures_across,
+% feedforward_captures_feedback, feedback_captures_feedforward.
+fieldName = sprintf('%s_captures_%s', normalizeCaptureLabelLocal(labelA), normalizeCaptureLabelLocal(labelB));
+
 end
 
 function label = normalizeCaptureLabelLocal(labelIn)
-    label = lower(char(string(labelIn)));
-    label = regexprep(label, '[^a-z0-9]+', '_');
-    label = regexprep(label, '^_+|_+$', '');
-    if isempty(label)
-        label = 'subspace';
-    end
+
+label = lower(char(string(labelIn)));
+label = regexprep(label, '[^a-z0-9]+', '_');
+label = regexprep(label, '^_+|_+$', '');
+if isempty(label)
+    label = 'subspace';
+end
+
 end
 
 function overlap = directionalSubspaceOverlapLocal(U, V)
-    % S(U,V) = 1 - ||(I - P_U)V||_F / ||V||_F
-    % P_U = U * inv(U' * U) * U'
-    % U and V are already DLAG-style SVD bases, so U'*U should be close to I.
 
-    if isempty(U) || isempty(V) || size(U, 2) == 0 || size(V, 2) == 0
-        overlap = NaN;
-        return;
-    end
+% S(U,V) = 1 - ||(I - P_U)V||_F / ||V||_F
+% P_U = U * inv(U' * U) * U'
+% U and V are already DLAG-style SVD bases, so U'*U should be close to I.
+if isempty(U) || isempty(V) || size(U, 2) == 0 || size(V, 2) == 0
+    overlap = NaN;
+    return;
+end
 
-    if size(U, 1) ~= size(V, 1)
-        error('U and V must live in the same observed neural space.');
-    end
+if size(U, 1) ~= size(V, 1)
+    error('U and V must live in the same observed neural space.');
+end
 
-    denom = norm(V, 'fro');
-    if denom <= eps
-        overlap = NaN;
-        return;
-    end
+denom = norm(V, 'fro');
+if denom <= eps
+    overlap = NaN;
+    return;
+end
 
-    P_U = U * ((U' * U) \ U');
-    residual = (eye(size(U, 1)) - P_U) * V;
-    overlap = 1 - norm(residual, 'fro') / denom;
+P_U = U * ((U' * U) \ U');
+residual = (eye(size(U, 1)) - P_U) * V;
+overlap = 1 - norm(residual, 'fro') / denom;
 
-    if overlap < 0 && overlap > -1e-12
-        overlap = 0;
-    end
+if overlap < 0 && overlap > -1e-12
+    overlap = 0;
+end
+
 end
 
 function Q = dlagSvdBasisLocal(L)
-    % Build an orthonormal basis using the same SVD idea as DLAG's
-    % orthogonalize.m and dominantModes_dlag.m.
-    % This function intentionally does not call MATLAB orth().
 
-    if isempty(L) || size(L, 2) == 0
+% Build an orthonormal basis using the same SVD idea as DLAG's
+% orthogonalize.m and dominantModes_dlag.m.
+% This function intentionally does not call MATLAB orth().
+if isempty(L) || size(L, 2) == 0
+    Q = zeros(size(L, 1), 0);
+    return;
+end
+
+xDim = size(L, 2);
+if xDim == 1
+    mag = sqrt(L' * L);
+    if mag <= eps
         Q = zeros(size(L, 1), 0);
-        return;
+    else
+        Q = L / mag;
     end
+    return;
+end
 
-    xDim = size(L, 2);
+[UU, DD, ~] = svd(L, 'econ');
+s = diag(DD);
+if isempty(s) || max(s) <= eps
+    Q = zeros(size(L, 1), 0);
+    return;
+end
 
-    if xDim == 1
-        mag = sqrt(L' * L);
-        if mag <= eps
-            Q = zeros(size(L, 1), 0);
-        else
-            Q = L / mag;
-        end
-        return;
-    end
+r = min(xDim, size(UU, 2));
+Q = UU(:, 1:r);
 
-    [UU, DD, ~] = svd(L, 'econ');
-    s = diag(DD);
-    if isempty(s) || max(s) <= eps
-        Q = zeros(size(L, 1), 0);
-        return;
-    end
-
-    r = min(xDim, size(UU, 2));
-    Q = UU(:, 1:r);
 end
 
 function latentClass = classifyDlagLatentsLocal(xDim_across, params, gp_params, ambiguousIdxs)
-    % Classify across latents into feedforward / feedback / ambiguous.
-    % positive delay -> feedforward
-    % negative delay -> feedback
-    % zero / NaN / bootstrap-ambiguous -> ambiguous
 
-    acrossDelay = [];
-    if isstruct(gp_params) && isfield(gp_params, 'delays') && ~isempty(gp_params.delays)
-        acrossDelay = reshape(gp_params.delays, 1, []);
-    elseif isfield(params, 'DelayMatrix') && ~isempty(params.DelayMatrix)
-        if size(params.DelayMatrix, 1) >= 2
-            acrossDelay = params.DelayMatrix(2, :) - params.DelayMatrix(1, :);
-        else
-            acrossDelay = params.DelayMatrix(1, :);
-        end
+% Classify across latents into feedforward / feedback / ambiguous.
+% positive delay -> feedforward
+% negative delay -> feedback
+% zero / NaN / bootstrap-ambiguous -> ambiguous
+acrossDelay = [];
+if isstruct(gp_params) && isfield(gp_params, 'delays') && ~isempty(gp_params.delays)
+    acrossDelay = reshape(gp_params.delays, 1, []);
+elseif isfield(params, 'DelayMatrix') && ~isempty(params.DelayMatrix)
+    if size(params.DelayMatrix, 1) >= 2
+        acrossDelay = params.DelayMatrix(2, :) - params.DelayMatrix(1, :);
+    else
+        acrossDelay = params.DelayMatrix(1, :);
     end
+end
 
-    if isempty(acrossDelay)
-        acrossDelay = nan(1, xDim_across);
-    end
+if isempty(acrossDelay)
+    acrossDelay = nan(1, xDim_across);
+end
+if numel(acrossDelay) < xDim_across
+    error('Delay vector has fewer entries than xDim_across.');
+end
+acrossDelay = acrossDelay(1:xDim_across);
 
-    if numel(acrossDelay) < xDim_across
-        error('Delay vector has fewer entries than xDim_across.');
-    end
-    acrossDelay = acrossDelay(1:xDim_across);
+ambiguousIdxs = normalizeAmbiguousIdxsLocal(ambiguousIdxs, xDim_across);
 
-    ambiguousIdxs = normalizeAmbiguousIdxsLocal(ambiguousIdxs, xDim_across);
+acrossIdx = 1:xDim_across;
+zeroOrNaNIdx = acrossIdx((acrossDelay == 0) | isnan(acrossDelay));
+ambiguousAll = unique([ambiguousIdxs, zeroOrNaNIdx]);
 
-    acrossIdx = 1:xDim_across;
-    zeroOrNaNIdx = acrossIdx((acrossDelay == 0) | isnan(acrossDelay));
-    ambiguousAll = unique([ambiguousIdxs, zeroOrNaNIdx]);
+ffIdx = find(acrossDelay > 0);
+fbIdx = find(acrossDelay < 0);
 
-    ffIdx = find(acrossDelay > 0);
-    fbIdx = find(acrossDelay < 0);
-    ffIdx = setdiff(ffIdx, ambiguousAll, 'stable');
-    fbIdx = setdiff(fbIdx, ambiguousAll, 'stable');
+ffIdx = setdiff(ffIdx, ambiguousAll, 'stable');
+fbIdx = setdiff(fbIdx, ambiguousAll, 'stable');
 
-    coveredAcross = unique([ffIdx, fbIdx, ambiguousAll]);
-    missingAcross = setdiff(acrossIdx, coveredAcross);
-    if ~isempty(missingAcross)
-        ambiguousAll = unique([ambiguousAll, missingAcross]);
-    end
+coveredAcross = unique([ffIdx, fbIdx, ambiguousAll]);
+missingAcross = setdiff(acrossIdx, coveredAcross);
+if ~isempty(missingAcross)
+    ambiguousAll = unique([ambiguousAll, missingAcross]);
+end
 
-    latentClass = struct();
-    latentClass.categoryLabels = {'Across', 'Within', 'Feedforward', 'Feedback', 'Ambiguous'};
-    latentClass.acrossDelay = acrossDelay;
-    latentClass.acrossIdx = acrossIdx;
-    latentClass.feedforwardIdx = ffIdx;
-    latentClass.feedbackIdx = fbIdx;
-    latentClass.ambiguousIdx = ambiguousAll;
+latentClass = struct();
+latentClass.categoryLabels = {'Across', 'Within', 'Feedforward', 'Feedback', 'Ambiguous'};
+latentClass.acrossDelay = acrossDelay;
+latentClass.acrossIdx = acrossIdx;
+latentClass.feedforwardIdx = ffIdx;
+latentClass.feedbackIdx = fbIdx;
+latentClass.ambiguousIdx = ambiguousAll;
+
 end
 
 function ambiguousIdxs = normalizeAmbiguousIdxsLocal(ambiguousIdxs, xDim_across)
-    if isempty(ambiguousIdxs)
-        ambiguousIdxs = [];
-        return;
-    end
 
-    if iscell(ambiguousIdxs)
-        tmp = [];
-        for ii = 1:numel(ambiguousIdxs)
-            if ~isempty(ambiguousIdxs{ii})
-                tmp = [tmp, reshape(ambiguousIdxs{ii}, 1, [])]; %#ok<AGROW>
-            end
+if isempty(ambiguousIdxs)
+    ambiguousIdxs = [];
+    return;
+end
+
+if iscell(ambiguousIdxs)
+    tmp = [];
+    for ii = 1:numel(ambiguousIdxs)
+        if ~isempty(ambiguousIdxs{ii})
+            tmp = [tmp, reshape(ambiguousIdxs{ii}, 1, [])]; %#ok<AGROW>
         end
-        ambiguousIdxs = tmp;
-    elseif islogical(ambiguousIdxs)
-        ambiguousIdxs = find(ambiguousIdxs);
-    else
-        ambiguousIdxs = reshape(ambiguousIdxs, 1, []);
     end
+    ambiguousIdxs = tmp;
+elseif islogical(ambiguousIdxs)
+    ambiguousIdxs = find(ambiguousIdxs);
+else
+    ambiguousIdxs = reshape(ambiguousIdxs, 1, []);
+end
 
-    ambiguousIdxs = unique(ambiguousIdxs);
-    ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
+ambiguousIdxs = unique(ambiguousIdxs);
+ambiguousIdxs = ambiguousIdxs(ambiguousIdxs >= 1 & ambiguousIdxs <= xDim_across);
+
 end
 
 function keepMask = getDslKeepMaskLocal(DSL, fieldName, groupIdx, localDim)
-    if isempty(DSL) || ~isstruct(DSL) || ~isfield(DSL, fieldName)
-        error('DSL must contain field %s when use_dsl_filter=true.', fieldName);
-    end
 
-    fieldVal = DSL.(fieldName);
-    if ~iscell(fieldVal) || numel(fieldVal) < groupIdx
-        error('DSL.%s must be a cell array with one entry per group.', fieldName);
-    end
+if isempty(DSL) || ~isstruct(DSL) || ~isfield(DSL, fieldName)
+    error('DSL must contain field %s when use_dsl_filter=true.', fieldName);
+end
 
-    keepMask = reshape(fieldVal{groupIdx}, 1, []) ~= 0;
-    if numel(keepMask) ~= localDim
-        error('DSL.%s{%d} has length %d, expected %d.', ...
-            fieldName, groupIdx, numel(keepMask), localDim);
+fieldVal = DSL.(fieldName);
+if ~iscell(fieldVal) || numel(fieldVal) < groupIdx
+    error('DSL.%s must be a cell array with one entry per group.', fieldName);
+end
+
+keepMask = reshape(fieldVal{groupIdx}, 1, []) ~= 0;
+if numel(keepMask) ~= localDim
+    error('DSL.%s{%d} has length %d, expected %d.', ...
+        fieldName, groupIdx, numel(keepMask), localDim);
+end
+
+end
+
+function keepMask = getSVExpKeepMaskLocal(SVExpFilter, fieldName, groupIdx, localDim)
+
+if isempty(SVExpFilter) || ~isstruct(SVExpFilter) || ~isfield(SVExpFilter, fieldName)
+    error('SVExpFilter must contain field %s when use_svexp_filter=true.', fieldName);
+end
+
+fieldVal = SVExpFilter.(fieldName);
+if ~iscell(fieldVal) || numel(fieldVal) < groupIdx
+    error('SVExpFilter.%s must be a cell array with one entry per group.', fieldName);
+end
+
+keepMask = reshape(fieldVal{groupIdx}, 1, []) ~= 0;
+if numel(keepMask) ~= localDim
+    error('SVExpFilter.%s{%d} has length %d, expected %d.', ...
+        fieldName, groupIdx, numel(keepMask), localDim);
+end
+
+end
+
+function checkSVExpThresholdLocal(SVExpFilter, expectedThreshold, svexpFile)
+
+if isstruct(SVExpFilter) && isfield(SVExpFilter, 'threshold') && ~isempty(SVExpFilter.threshold)
+    actualThreshold = SVExpFilter.threshold;
+    if isscalar(actualThreshold) && isfinite(actualThreshold)
+        if abs(actualThreshold - expectedThreshold) > 1e-12
+            warning('SVExpFilter threshold in %s is %.12g, but expected %.12g.', ...
+                svexpFile, actualThreshold, expectedThreshold);
+        end
     end
+end
+
 end
 
 function Summary = buildConditionSummarySubspaceSimLocal(AllSubspaceSim, condition_list, stim_abbrev)
-    nCond = numel(AllSubspaceSim);
-    if nCond < 1
-        error('AllSubspaceSim is empty.');
-    end
 
-    firstSim = AllSubspaceSim{1};
-    numGroups = numel(firstSim.group);
+nCond = numel(AllSubspaceSim);
+if nCond < 1
+    error('AllSubspaceSim is empty.');
+end
 
-    Summary = struct();
-    Summary.classification = buildSummaryClassificationLocal(AllSubspaceSim, condition_list, stim_abbrev);
+firstSim = AllSubspaceSim{1};
+numGroups = numel(firstSim.group);
 
-    for g = 1:numGroups
-        Summary.group(g).name = sprintf('Group %d', g);
-        Summary.group(g).pairNames = firstSim.group(g).pairNames;
-        Summary.group(g).pair = cell(1, numel(firstSim.group(g).pair));
+Summary = struct();
+Summary.classification = buildSummaryClassificationLocal(AllSubspaceSim, condition_list, stim_abbrev);
 
-        for p = 1:numel(firstSim.group(g).pair)
-            pr0 = firstSim.group(g).pair{p};
-            prSum = struct();
-            prSum.name = pr0.name;
-            prSum.labelA = pr0.labelA;
-            prSum.labelB = pr0.labelB;
-            prSum.condition_id = condition_list;
-            prSum.stim_abbrev = stim_abbrev;
-            prSum.status = cell(1, nCond);
-            prSum.warning = cell(1, nCond);
-            prSum.idxA = cell(1, nCond);
-            prSum.idxB = cell(1, nCond);
-            prSum.rawDimA = nan(1, nCond);
-            prSum.rawDimB = nan(1, nCond);
-            prSum.basisA = cell(1, nCond);
-            prSum.basisB = cell(1, nCond);
-            prSum.principal.cosine = cell(1, nCond);
-            prSum.principal.angle_deg = cell(1, nCond);
-            prSum.principal.first_angle_deg = nan(1, nCond);
-            prSum.principal.last_angle_deg = nan(1, nCond);
-            prSum.principal.median_angle_deg = nan(1, nCond);
-            simFields = fieldnames(pr0.similarity);
-            for sf = 1:numel(simFields)
-                prSum.similarity.(simFields{sf}) = nan(1, nCond);
-            end
+for g = 1:numGroups
+    Summary.group(g).name = sprintf('Group %d', g);
+    Summary.group(g).pairNames = firstSim.group(g).pairNames;
+    Summary.group(g).pair = cell(1, numel(firstSim.group(g).pair));
 
-            for c = 1:nCond
-                thisSim = AllSubspaceSim{c};
-                if numel(thisSim.group) < g || numel(thisSim.group(g).pair) < p
-                    error('Condition %d is missing group %d pair %d.', c, g, p);
-                end
-                pr = thisSim.group(g).pair{p};
-                prSum.status{c} = pr.status;
-                prSum.warning{c} = pr.warning;
-                prSum.idxA{c} = pr.idxA;
-                prSum.idxB{c} = pr.idxB;
-                prSum.rawDimA(c) = pr.rawDimA;
-                prSum.rawDimB(c) = pr.rawDimB;
-                prSum.basisA{c} = pr.basisA;
-                prSum.basisB{c} = pr.basisB;
-                prSum.principal.cosine{c} = pr.principal.cosine;
-                prSum.principal.angle_deg{c} = pr.principal.angle_deg;
-                prSum.principal.first_angle_deg(c) = pr.principal.first_angle_deg;
-                prSum.principal.last_angle_deg(c) = pr.principal.last_angle_deg;
-                prSum.principal.median_angle_deg(c) = pr.principal.median_angle_deg;
-                for sf = 1:numel(simFields)
-                    simField = simFields{sf};
-                    if isfield(pr.similarity, simField) && isnumeric(pr.similarity.(simField)) && isscalar(pr.similarity.(simField))
-                        prSum.similarity.(simField)(c) = pr.similarity.(simField);
-                    else
-                        prSum.similarity.(simField)(c) = NaN;
-                    end
-                end
-            end
+    for p = 1:numel(firstSim.group(g).pair)
+        pr0 = firstSim.group(g).pair{p};
+        prSum = struct();
+        prSum.name = pr0.name;
+        prSum.labelA = pr0.labelA;
+        prSum.labelB = pr0.labelB;
+        prSum.condition_id = condition_list;
+        prSum.stim_abbrev = stim_abbrev;
+        prSum.status = cell(1, nCond);
+        prSum.warning = cell(1, nCond);
+        prSum.idxA = cell(1, nCond);
+        prSum.idxB = cell(1, nCond);
+        prSum.rawDimA = nan(1, nCond);
+        prSum.rawDimB = nan(1, nCond);
+        prSum.basisA = cell(1, nCond);
+        prSum.basisB = cell(1, nCond);
+        prSum.principal.cosine = cell(1, nCond);
+        prSum.principal.angle_deg = cell(1, nCond);
+        prSum.principal.first_angle_deg = nan(1, nCond);
+        prSum.principal.last_angle_deg = nan(1, nCond);
+        prSum.principal.median_angle_deg = nan(1, nCond);
 
-            Summary.group(g).pair{p} = prSum;
+        simFields = fieldnames(pr0.similarity);
+        for sf = 1:numel(simFields)
+            prSum.similarity.(simFields{sf}) = nan(1, nCond);
         end
+
+        for c = 1:nCond
+            thisSim = AllSubspaceSim{c};
+            if numel(thisSim.group) < g || numel(thisSim.group(g).pair) < p
+                error('Condition %d is missing group %d pair %d.', c, g, p);
+            end
+
+            pr = thisSim.group(g).pair{p};
+            prSum.status{c} = pr.status;
+            prSum.warning{c} = pr.warning;
+            prSum.idxA{c} = pr.idxA;
+            prSum.idxB{c} = pr.idxB;
+            prSum.rawDimA(c) = pr.rawDimA;
+            prSum.rawDimB(c) = pr.rawDimB;
+            prSum.basisA{c} = pr.basisA;
+            prSum.basisB{c} = pr.basisB;
+            prSum.principal.cosine{c} = pr.principal.cosine;
+            prSum.principal.angle_deg{c} = pr.principal.angle_deg;
+            prSum.principal.first_angle_deg(c) = pr.principal.first_angle_deg;
+            prSum.principal.last_angle_deg(c) = pr.principal.last_angle_deg;
+            prSum.principal.median_angle_deg(c) = pr.principal.median_angle_deg;
+
+            for sf = 1:numel(simFields)
+                simField = simFields{sf};
+                if isfield(pr.similarity, simField) && isnumeric(pr.similarity.(simField)) && isscalar(pr.similarity.(simField))
+                    prSum.similarity.(simField)(c) = pr.similarity.(simField);
+                else
+                    prSum.similarity.(simField)(c) = NaN;
+                end
+            end
+        end
+
+        Summary.group(g).pair{p} = prSum;
     end
+end
+
 end
 
 function classification = buildSummaryClassificationLocal(AllSubspaceSim, condition_list, stim_abbrev)
-    nCond = numel(AllSubspaceSim);
-    class0 = AllSubspaceSim{1}.classification;
 
-    classification = struct();
-    if isfield(class0, 'categoryLabels')
-        classification.categoryLabels = class0.categoryLabels;
-    end
-    classification.condition_id = condition_list;
-    classification.stim_abbrev = stim_abbrev;
+nCond = numel(AllSubspaceSim);
+class0 = AllSubspaceSim{1}.classification;
+classification = struct();
 
-    fieldsToCollect = {'acrossDelay', 'acrossIdx', 'feedforwardIdx', 'feedbackIdx', 'ambiguousIdx'};
-    for f = 1:numel(fieldsToCollect)
-        fieldName = fieldsToCollect{f};
-        classification.(fieldName) = cell(1, nCond);
-        for c = 1:nCond
-            if isfield(AllSubspaceSim{c}.classification, fieldName)
-                classification.(fieldName){c} = AllSubspaceSim{c}.classification.(fieldName);
-            else
-                classification.(fieldName){c} = [];
-            end
+if isfield(class0, 'categoryLabels')
+    classification.categoryLabels = class0.categoryLabels;
+end
+classification.condition_id = condition_list;
+classification.stim_abbrev = stim_abbrev;
+
+fieldsToCollect = {'acrossDelay', 'acrossIdx', 'feedforwardIdx', 'feedbackIdx', 'ambiguousIdx'};
+for f = 1:numel(fieldsToCollect)
+    fieldName = fieldsToCollect{f};
+    classification.(fieldName) = cell(1, nCond);
+    for c = 1:nCond
+        if isfield(AllSubspaceSim{c}.classification, fieldName)
+            classification.(fieldName){c} = AllSubspaceSim{c}.classification.(fieldName);
+        else
+            classification.(fieldName){c} = [];
         end
     end
+end
+
 end
 
 function tableCell = buildConditionGroupTableCellLocal(SubspaceSim, groupIdx, stim_abbrev)
-    nRows = numel(stim_abbrev);
-    tableCell = makeSummaryHeaderCellLocal('Stim');
-    for r = 1:nRows
-        rowCell = makeOneTableRowFromGroupLocal(SubspaceSim.group(groupIdx), r, stim_abbrev{r});
-        tableCell(end+1, :) = rowCell; %#ok<AGROW>
-    end
+
+nRows = numel(stim_abbrev);
+tableCell = makeSummaryHeaderCellLocal('Stim');
+for r = 1:nRows
+    rowCell = makeOneTableRowFromGroupLocal(SubspaceSim.group(groupIdx), r, stim_abbrev{r});
+    tableCell(end+1, :) = rowCell; %#ok<AGROW>
+end
+
 end
 
 function tableCell = buildPooledGroupTableCellLocal(SubspaceSim)
-    nGroups = numel(SubspaceSim.group);
-    tableCell = makeSummaryHeaderCellLocal('Group');
-    for g = 1:nGroups
-        rowLabel = sprintf('Group %d', g);
-        rowCell = makeOneTableRowFromGroupLocal(SubspaceSim.group(g), 1, rowLabel);
-        tableCell(end+1, :) = rowCell; %#ok<AGROW>
-    end
+
+nGroups = numel(SubspaceSim.group);
+tableCell = makeSummaryHeaderCellLocal('Group');
+for g = 1:nGroups
+    rowLabel = sprintf('Group %d', g);
+    rowCell = makeOneTableRowFromGroupLocal(SubspaceSim.group(g), 1, rowLabel);
+    tableCell(end+1, :) = rowCell; %#ok<AGROW>
+end
+
 end
 
 function tableCell = makeSummaryHeaderCellLocal(firstColName)
-    header1 = {firstColName, 'Across dim', 'Within dim', ...
-        'Across vs Within angle', '', '', ...
-        'Across vs Within overlap', '', '', ...
-        'FF dim', 'FB dim', ...
-        'Feedforward vs Feedback angle', '', '', ...
-        'Feedforward vs Feedback overlap', '', ''};
 
-    header2 = {'', '', '', ...
-        'First', 'Last', 'Median', ...
-        'Across captures Within', 'Within captures Across', 'Avg', ...
-        '', '', ...
-        'First', 'Last', 'Median', ...
-        'Feedforward captures Feedback', 'Feedback captures Feedforward', 'Avg'};
+header1 = {firstColName, 'Across dim', 'Within dim', ...
+    'Across vs Within angle', '', '', ...
+    'Across vs Within overlap', '', '', ...
+    'FF dim', 'FB dim', ...
+    'Feedforward vs Feedback angle', '', '', ...
+    'Feedforward vs Feedback overlap', '', ''};
 
-    tableCell = [header1; header2];
+header2 = {'', '', '', ...
+    'First', 'Last', 'Median', ...
+    'Across captures Within', 'Within captures Across', 'Avg', ...
+    '', '', ...
+    'First', 'Last', 'Median', ...
+    'Feedforward captures Feedback', 'Feedback captures Feedforward', 'Avg'};
+
+tableCell = [header1; header2];
+
 end
 
 function rowCell = makeOneTableRowFromGroupLocal(groupStruct, idx, rowLabel)
-    avw = getPairByNameLocal(groupStruct, 'across_vs_within');
-    fvf = getPairByNameLocal(groupStruct, 'feedforward_vs_feedback');
 
-    rowCell = {rowLabel, ...
-        formatDimLocal(getVectorValueLocal(avw.rawDimA, idx)), ...
-        formatDimLocal(getVectorValueLocal(avw.rawDimB, idx)), ...
-        formatMetricLocal(getVectorValueLocal(avw.principal.first_angle_deg, idx)), ...
-        formatMetricLocal(getVectorValueLocal(avw.principal.last_angle_deg, idx)), ...
-        formatMetricLocal(getVectorValueLocal(avw.principal.median_angle_deg, idx)), ...
-        formatMetricLocal(getCaptureValueLocal(avw, idx, 'Across', 'Within')), ...
-        formatMetricLocal(getCaptureValueLocal(avw, idx, 'Within', 'Across')), ...
-        formatMetricLocal(getVectorValueLocal(avw.similarity.avg, idx)), ...
-        formatDimLocal(getVectorValueLocal(fvf.rawDimA, idx)), ...
-        formatDimLocal(getVectorValueLocal(fvf.rawDimB, idx)), ...
-        formatMetricLocal(getVectorValueLocal(fvf.principal.first_angle_deg, idx)), ...
-        formatMetricLocal(getVectorValueLocal(fvf.principal.last_angle_deg, idx)), ...
-        formatMetricLocal(getVectorValueLocal(fvf.principal.median_angle_deg, idx)), ...
-        formatMetricLocal(getCaptureValueLocal(fvf, idx, 'Feedforward', 'Feedback')), ...
-        formatMetricLocal(getCaptureValueLocal(fvf, idx, 'Feedback', 'Feedforward')), ...
-        formatMetricLocal(getVectorValueLocal(fvf.similarity.avg, idx))};
+avw = getPairByNameLocal(groupStruct, 'across_vs_within');
+fvf = getPairByNameLocal(groupStruct, 'feedforward_vs_feedback');
+
+rowCell = {rowLabel, ...
+    formatDimLocal(getVectorValueLocal(avw.rawDimA, idx)), ...
+    formatDimLocal(getVectorValueLocal(avw.rawDimB, idx)), ...
+    formatMetricLocal(getVectorValueLocal(avw.principal.first_angle_deg, idx)), ...
+    formatMetricLocal(getVectorValueLocal(avw.principal.last_angle_deg, idx)), ...
+    formatMetricLocal(getVectorValueLocal(avw.principal.median_angle_deg, idx)), ...
+    formatMetricLocal(getCaptureValueLocal(avw, idx, 'Across', 'Within')), ...
+    formatMetricLocal(getCaptureValueLocal(avw, idx, 'Within', 'Across')), ...
+    formatMetricLocal(getVectorValueLocal(avw.similarity.avg, idx)), ...
+    formatDimLocal(getVectorValueLocal(fvf.rawDimA, idx)), ...
+    formatDimLocal(getVectorValueLocal(fvf.rawDimB, idx)), ...
+    formatMetricLocal(getVectorValueLocal(fvf.principal.first_angle_deg, idx)), ...
+    formatMetricLocal(getVectorValueLocal(fvf.principal.last_angle_deg, idx)), ...
+    formatMetricLocal(getVectorValueLocal(fvf.principal.median_angle_deg, idx)), ...
+    formatMetricLocal(getCaptureValueLocal(fvf, idx, 'Feedforward', 'Feedback')), ...
+    formatMetricLocal(getCaptureValueLocal(fvf, idx, 'Feedback', 'Feedforward')), ...
+    formatMetricLocal(getVectorValueLocal(fvf.similarity.avg, idx))};
+
 end
 
 function pr = getPairByNameLocal(groupStruct, pairName)
-    pr = [];
-    for p = 1:numel(groupStruct.pair)
-        thisPr = groupStruct.pair{p};
-        if isfield(thisPr, 'name') && strcmp(thisPr.name, pairName)
-            pr = thisPr;
-            return;
-        end
+
+pr = [];
+for p = 1:numel(groupStruct.pair)
+    thisPr = groupStruct.pair{p};
+    if isfield(thisPr, 'name') && strcmp(thisPr.name, pairName)
+        pr = thisPr;
+        return;
     end
-    error('Could not find pair %s in %s.', pairName, groupStruct.name);
+end
+error('Could not find pair %s in %s.', pairName, groupStruct.name);
+
 end
 
 function val = getCaptureValueLocal(pairStruct, idx, labelA, labelB)
-    fieldName = makeCaptureFieldNameLocal(labelA, labelB);
-    if isfield(pairStruct, 'similarity') && isfield(pairStruct.similarity, fieldName)
-        val = getVectorValueLocal(pairStruct.similarity.(fieldName), idx);
-    else
-        val = NaN;
-    end
+
+fieldName = makeCaptureFieldNameLocal(labelA, labelB);
+if isfield(pairStruct, 'similarity') && isfield(pairStruct.similarity, fieldName)
+    val = getVectorValueLocal(pairStruct.similarity.(fieldName), idx);
+else
+    val = NaN;
+end
+
 end
 
 function val = getVectorValueLocal(x, idx)
-    if iscell(x)
-        if idx <= numel(x)
-            val = x{idx};
-        else
-            val = NaN;
-        end
-        return;
-    end
 
-    if isempty(x)
-        val = NaN;
-    elseif isscalar(x)
-        val = x;
-    elseif idx <= numel(x)
-        val = x(idx);
+if iscell(x)
+    if idx <= numel(x)
+        val = x{idx};
     else
         val = NaN;
     end
+    return;
+end
+
+if isempty(x)
+    val = NaN;
+elseif isscalar(x)
+    val = x;
+elseif idx <= numel(x)
+    val = x(idx);
+else
+    val = NaN;
+end
+
 end
 
 function s = formatDimLocal(v)
-    if isempty(v) || ~isnumeric(v) || ~isscalar(v) || ~isfinite(v)
-        s = 'NaN';
-    else
-        s = sprintf('%d', round(v));
-    end
+
+if isempty(v) || ~isnumeric(v) || ~isscalar(v) || ~isfinite(v)
+    s = 'NaN';
+else
+    s = sprintf('%d', round(v));
+end
+
 end
 
 function s = formatMetricLocal(v)
-    if isempty(v) || ~isnumeric(v) || ~isscalar(v) || ~isfinite(v)
-        s = 'NaN';
-    else
-        s = sprintf('%.4f', v);
-    end
+
+if isempty(v) || ~isnumeric(v) || ~isscalar(v) || ~isfinite(v)
+    s = 'NaN';
+else
+    s = sprintf('%.4f', v);
+end
+
 end
 
 function printCellTableLocal(fid, tableCell, sepAfter)
-    if nargin < 3
-        sepAfter = [];
+
+if nargin < 3
+    sepAfter = [];
+end
+
+strCell = cell(size(tableCell));
+for r = 1:size(tableCell, 1)
+    for c = 1:size(tableCell, 2)
+        strCell{r, c} = char(string(tableCell{r, c}));
     end
+end
 
-    strCell = cell(size(tableCell));
-    for r = 1:size(tableCell, 1)
-        for c = 1:size(tableCell, 2)
-            strCell{r, c} = char(string(tableCell{r, c}));
-        end
-    end
-
-    widths = zeros(1, size(strCell, 2));
-    for c = 1:size(strCell, 2)
-        maxWidth = 1;
-        for r = 1:size(strCell, 1)
-            maxWidth = max(maxWidth, length(strCell{r, c}));
-        end
-        widths(c) = maxWidth;
-    end
-
-    totalWidth = sum(widths + 2) + 3 * numel(sepAfter);
-
+widths = zeros(1, size(strCell, 2));
+for c = 1:size(strCell, 2)
+    maxWidth = 1;
     for r = 1:size(strCell, 1)
-        for c = 1:size(strCell, 2)
-            if c == 1
-                fprintf(fid, '%-*s', widths(c), strCell{r, c});
-            else
-                fprintf(fid, '  %*s', widths(c), strCell{r, c});
-            end
-            if ismember(c, sepAfter)
-                fprintf(fid, ' |');
-            end
+        maxWidth = max(maxWidth, length(strCell{r, c}));
+    end
+    widths(c) = maxWidth;
+end
+
+totalWidth = sum(widths + 2) + 3 * numel(sepAfter);
+
+for r = 1:size(strCell, 1)
+    for c = 1:size(strCell, 2)
+        if c == 1
+            fprintf(fid, '%-*s', widths(c), strCell{r, c});
+        else
+            fprintf(fid, ' %*s', widths(c), strCell{r, c});
         end
-        fprintf(fid, '\n');
-        if r == 2
-            fprintf(fid, '%s\n', repmat('-', 1, totalWidth));
+        if ismember(c, sepAfter)
+            fprintf(fid, ' |');
         end
     end
+    fprintf(fid, '\n');
+    if r == 2
+        fprintf(fid, '%s\n', repmat('-', 1, totalWidth));
+    end
+end
+
 end
 
 function saveTableTextAndCsvLocal(tableCell, txtFile, csvFile, titleStr, sepAfter)
-    fid = fopen(txtFile, 'w');
-    if fid < 0
-        error('Could not open %s for writing.', txtFile);
-    end
-    cleanupObj = onCleanup(@() fclose(fid));
-    fprintf(fid, '%s\n', titleStr);
-    printCellTableLocal(fid, tableCell, sepAfter);
-    clear cleanupObj;
 
-    writeCellCsvLocal(tableCell, csvFile);
+fid = fopen(txtFile, 'w');
+if fid < 0
+    error('Could not open %s for writing.', txtFile);
+end
+cleanupObj = onCleanup(@() fclose(fid));
+fprintf(fid, '%s\n', titleStr);
+printCellTableLocal(fid, tableCell, sepAfter);
+clear cleanupObj;
+
+writeCellCsvLocal(tableCell, csvFile);
+
 end
 
 function writeCellCsvLocal(C, filename)
-    fid = fopen(filename, 'w');
-    if fid < 0
-        error('Could not open %s for writing.', filename);
-    end
-    cleanupObj = onCleanup(@() fclose(fid));
 
-    for r = 1:size(C, 1)
-        for c = 1:size(C, 2)
-            txt = char(string(C{r, c}));
-            txt = strrep(txt, '"', '""');
-            if contains(txt, ',') || contains(txt, '"') || contains(txt, newline)
-                txt = ['"', txt, '"']; %#ok<AGROW>
-            end
-            if c > 1
-                fprintf(fid, ',');
-            end
-            fprintf(fid, '%s', txt);
+fid = fopen(filename, 'w');
+if fid < 0
+    error('Could not open %s for writing.', filename);
+end
+cleanupObj = onCleanup(@() fclose(fid));
+
+for r = 1:size(C, 1)
+    for c = 1:size(C, 2)
+        txt = char(string(C{r, c}));
+        txt = strrep(txt, '"', '""');
+        if contains(txt, ',') || contains(txt, '"') || contains(txt, newline)
+            txt = ['"', txt, '"']; %#ok<AGROW>
         end
-        fprintf(fid, '\n');
+        if c > 1
+            fprintf(fid, ',');
+        end
+        fprintf(fid, '%s', txt);
     end
-    clear cleanupObj;
+    fprintf(fid, '\n');
+end
+
+clear cleanupObj;
+
 end
 
 function printSubspaceSimilarityResultsLocal(SubspaceSim)
-    for g = 1:numel(SubspaceSim.group)
-        fprintf('\n%s\n', SubspaceSim.group(g).name);
-        for p = 1:numel(SubspaceSim.group(g).pair)
-            pr = SubspaceSim.group(g).pair{p};
-            fprintf('  %s: %s vs %s\n', pr.name, pr.labelA, pr.labelB);
-            fprintf('    dims: %s=%d, %s=%d\n', ...
-                pr.labelA, pr.rawDimA, pr.labelB, pr.rawDimB);
-            if strcmp(pr.status, 'ok')
-                fprintf('    principal angle first / last / median deg = %.4f / %.4f / %.4f\n', ...
-                    pr.principal.first_angle_deg, ...
-                    pr.principal.last_angle_deg, ...
-                    pr.principal.median_angle_deg);
-                fprintf('    subspace overlap: %s captures %s = %.4f; %s captures %s = %.4f; avg = %.4f\n', ...
-                    pr.labelA, pr.labelB, getCaptureValueLocal(pr, 1, pr.labelA, pr.labelB), ...
-                    pr.labelB, pr.labelA, getCaptureValueLocal(pr, 1, pr.labelB, pr.labelA), ...
-                    pr.similarity.avg);
-            else
-                fprintf('    skipped: %s\n', pr.warning);
-            end
+
+for g = 1:numel(SubspaceSim.group)
+    fprintf('\n%s\n', SubspaceSim.group(g).name);
+    for p = 1:numel(SubspaceSim.group(g).pair)
+        pr = SubspaceSim.group(g).pair{p};
+        fprintf('  %s: %s vs %s\n', pr.name, pr.labelA, pr.labelB);
+        fprintf('    dims: %s=%d, %s=%d\n', ...
+            pr.labelA, pr.rawDimA, pr.labelB, pr.rawDimB);
+        if strcmp(pr.status, 'ok')
+            fprintf('    principal angle first / last / median deg = %.4f / %.4f / %.4f\n', ...
+                pr.principal.first_angle_deg, ...
+                pr.principal.last_angle_deg, ...
+                pr.principal.median_angle_deg);
+            fprintf('    subspace overlap: %s captures %s = %.4f; %s captures %s = %.4f; avg = %.4f\n', ...
+                pr.labelA, pr.labelB, getCaptureValueLocal(pr, 1, pr.labelA, pr.labelB), ...
+                pr.labelB, pr.labelA, getCaptureValueLocal(pr, 1, pr.labelB, pr.labelA), ...
+                pr.similarity.avg);
+        else
+            fprintf('    skipped: %s\n', pr.warning);
         end
     end
+end
+
 end
 
 function fname = findOneFileLocal(parentDir, pattern, mustExist)
-    if ~exist(parentDir, 'dir')
-        error('Directory not found: %s', parentDir);
-    end
 
-    files = dir(fullfile(parentDir, pattern));
-    if isempty(files)
-        if mustExist
-            error('No %s file found in %s.', pattern, parentDir);
-        else
-            fname = '';
-            return;
-        end
-    end
-
-    [~, idx] = sort([files.datenum], 'descend');
-    files = files(idx);
-    fname = fullfile(parentDir, files(1).name);
+if ~exist(parentDir, 'dir')
+    error('Directory not found: %s', parentDir);
 end
 
-function tag = makeLatentSelectionTagLocal(use_dsl_filter, dsl_field)
-    if use_dsl_filter
-        fieldTag = char(string(dsl_field));
-        fieldTag = regexprep(fieldTag, '[^A-Za-z0-9]+', '_');
-        fieldTag = regexprep(fieldTag, '^_+|_+$', '');
-        tag = sprintf('DSL_%s_filtered', fieldTag);
+files = dir(fullfile(parentDir, pattern));
+if isempty(files)
+    if mustExist
+        error('No %s file found in %s.', pattern, parentDir);
     else
-        tag = 'all_latents';
+        fname = '';
+        return;
     end
 end
 
-function displayName = makeLatentSelectionDisplayLocal(use_dsl_filter, dsl_field)
-    if use_dsl_filter
-        displayName = sprintf('DSL %s filtered', char(string(dsl_field)));
-    else
-        displayName = 'all latents';
-    end
+[~, idx] = sort([files.datenum], 'descend');
+files = files(idx);
+fname = fullfile(parentDir, files(1).name);
+
+end
+
+function tag = makeLatentSelectionTagLocal(use_dsl_filter, dsl_field, use_svexp_filter, svexp_field, shared_varexp_threshold)
+
+parts = {};
+if use_dsl_filter
+    parts{end+1} = sprintf('DSL_%s_filtered', sanitizeTagLocal(dsl_field)); %#ok<AGROW>
+end
+if use_svexp_filter
+    parts{end+1} = sprintf('SVExp_%s_%s_filtered', ...
+        thresholdTagLocal(shared_varexp_threshold), sanitizeTagLocal(svexp_field)); %#ok<AGROW>
+end
+
+if isempty(parts)
+    tag = 'all_latents';
+else
+    tag = strjoin(parts, '_and_');
+end
+
+end
+
+function displayName = makeLatentSelectionDisplayLocal(use_dsl_filter, dsl_field, use_svexp_filter, svexp_field, shared_varexp_threshold)
+
+parts = {};
+if use_dsl_filter
+    parts{end+1} = sprintf('DSL %s filtered', char(string(dsl_field))); %#ok<AGROW>
+end
+if use_svexp_filter
+    parts{end+1} = sprintf('SVExp %s %s filtered', ...
+        thresholdTagLocal(shared_varexp_threshold), char(string(svexp_field))); %#ok<AGROW>
+end
+
+if isempty(parts)
+    displayName = 'all latents';
+else
+    displayName = strjoin(parts, ' + ');
+end
+
+end
+
+function tag = sanitizeTagLocal(x)
+
+tag = char(string(x));
+tag = regexprep(tag, '[^A-Za-z0-9]+', '_');
+tag = regexprep(tag, '^_+|_+$', '');
+if isempty(tag)
+    tag = 'field';
+end
+
+end
+
+function tag = thresholdTagLocal(threshold)
+
+% Convert numeric threshold to a filename-safe tag.
+% Examples:
+%   0.95  -> threshold0p95
+%   0.975 -> threshold0p975
+%   1     -> threshold1
+tag = sprintf('threshold%.6g', threshold);
+tag = strrep(tag, '.', 'p');
+tag = strrep(tag, '-', 'm');
+
 end
 
 function all_tags = get_all_run_tagsLocal(model_data_allruns)
-    all_tags = cell(numel(model_data_allruns), 1);
-    for j = 1:numel(model_data_allruns)
-        if ~isfield(model_data_allruns{j}, 'stim_tag')
-            error('stim_tag missing in model_data_allruns{%d}.', j);
-        end
-        all_tags{j} = model_data_allruns{j}.stim_tag;
+
+all_tags = cell(numel(model_data_allruns), 1);
+for j = 1:numel(model_data_allruns)
+    if ~isfield(model_data_allruns{j}, 'stim_tag')
+        error('stim_tag missing in model_data_allruns{%d}.', j);
     end
+    all_tags{j} = model_data_allruns{j}.stim_tag;
+end
+
 end
 
 function conditionMap = buildConditionSummaryMapLocal(condition_full, condition_list)
-    if isempty(condition_full)
-        error('condition_full is empty.');
+
+if isempty(condition_full)
+    error('condition_full is empty.');
+end
+
+nAll = numel(condition_full);
+stimNameAll = strings(nAll, 1);
+sizeAll = nan(nAll, 1);
+contrastAll = nan(nAll, 1);
+effDirAll = nan(nAll, 1);
+
+for k = 1:nAll
+    if ~isfield(condition_full(k), 'stim_name')
+        error('condition_full(%d) missing field stim_name.', k);
+    end
+    if ~isfield(condition_full(k), 'size')
+        error('condition_full(%d) missing field size.', k);
+    end
+    if ~isfield(condition_full(k), 'contrast')
+        error('condition_full(%d) missing field contrast.', k);
     end
 
-    nAll = numel(condition_full);
-    stimNameAll = strings(nAll, 1);
-    sizeAll = nan(nAll, 1);
-    contrastAll = nan(nAll, 1);
-    effDirAll = nan(nAll, 1);
+    currStim = lower(string(condition_full(k).stim_name));
+    stimNameAll(k) = currStim;
+    sizeAll(k) = condition_full(k).size;
+    contrastAll(k) = condition_full(k).contrast;
 
-    for k = 1:nAll
-        if ~isfield(condition_full(k), 'stim_name')
-            error('condition_full(%d) missing field stim_name.', k);
+    if currStim == "plaid"
+        if ~isfield(condition_full(k), 'plaid_dir')
+            error('condition_full(%d) missing field plaid_dir.', k);
         end
-        if ~isfield(condition_full(k), 'size')
-            error('condition_full(%d) missing field size.', k);
+        effDirAll(k) = condition_full(k).plaid_dir;
+    elseif currStim == "grating"
+        if ~isfield(condition_full(k), 'grating_dir')
+            error('condition_full(%d) missing field grating_dir.', k);
         end
-        if ~isfield(condition_full(k), 'contrast')
-            error('condition_full(%d) missing field contrast.', k);
-        end
-
-        currStim = lower(string(condition_full(k).stim_name));
-        stimNameAll(k) = currStim;
-        sizeAll(k) = condition_full(k).size;
-        contrastAll(k) = condition_full(k).contrast;
-
-        if currStim == "plaid"
-            if ~isfield(condition_full(k), 'plaid_dir')
-                error('condition_full(%d) missing field plaid_dir.', k);
-            end
-            effDirAll(k) = condition_full(k).plaid_dir;
-        elseif currStim == "grating"
-            if ~isfield(condition_full(k), 'grating_dir')
-                error('condition_full(%d) missing field grating_dir.', k);
-            end
-            effDirAll(k) = condition_full(k).grating_dir;
-        else
-            error('Unsupported stim_name in condition_full(%d): %s', k, char(currStim));
-        end
-    end
-
-    allStim = unique(stimNameAll, 'stable');
-    allStim = lower(allStim);
-    if all(ismember(["grating", "plaid"], allStim))
-        stimLabels = ["grating", "plaid"];
+        effDirAll(k) = condition_full(k).grating_dir;
     else
-        if numel(allStim) ~= 2
-            error('Expected exactly 2 stim levels in condition_full.');
-        end
-        stimLabels = allStim(:)';
+        error('Unsupported stim_name in condition_full(%d): %s', k, char(currStim));
+    end
+end
+
+allStim = unique(stimNameAll, 'stable');
+allStim = lower(allStim);
+if all(ismember(["grating", "plaid"], allStim))
+    stimLabels = ["grating", "plaid"];
+else
+    if numel(allStim) ~= 2
+        error('Expected exactly 2 stim levels in condition_full.');
+    end
+    stimLabels = allStim(:)';
+end
+
+sizeVals = unique(sizeAll);
+sizeVals = sort(sizeVals(:)');
+if numel(sizeVals) ~= 2
+    error('Expected exactly 2 size levels in condition_full.');
+end
+
+contrastValuesByStim = struct();
+for s = 1:2
+    idx = (stimNameAll == stimLabels(s));
+    cvals = unique(contrastAll(idx));
+    cvals = sort(cvals(:)');
+    if numel(cvals) ~= 2
+        error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
+    end
+    contrastValuesByStim.(char(stimLabels(s))) = cvals;
+end
+
+dirVals = unique(effDirAll);
+dirVals = sort(dirVals(:)');
+if numel(dirVals) ~= 2
+    error('Expected exactly 2 effective direction values in condition_full.');
+end
+
+stimDirLabels = {'stim_dir1', 'stim_dir2'};
+
+condLabels = { ...
+    'grating-small-low', 'grating-small-high', ...
+    'grating-large-low', 'grating-large-high', ...
+    'plaid-small-low', 'plaid-small-high', ...
+    'plaid-large-low', 'plaid-large-high'};
+
+condShortLabels = { ...
+    'G-S-L', 'G-S-H', 'G-L-L', 'G-L-H', ...
+    'P-S-L', 'P-S-H', 'P-L-L', 'P-L-H'};
+
+entries = struct([]);
+for ii = 1:numel(condition_list)
+    condID = condition_list(ii);
+    if condID < 1 || condID > nAll
+        error('Condition ID %d is outside condition_full range.', condID);
     end
 
-    sizeVals = unique(sizeAll);
-    sizeVals = sort(sizeVals(:)');
-    if numel(sizeVals) ~= 2
-        error('Expected exactly 2 size levels in condition_full.');
+    currStim = lower(string(condition_full(condID).stim_name));
+    currSize = condition_full(condID).size;
+    currContrast = condition_full(condID).contrast;
+    if currStim == "plaid"
+        currDir = condition_full(condID).plaid_dir;
+    else
+        currDir = condition_full(condID).grating_dir;
     end
 
-    contrastValuesByStim = struct();
-    for s = 1:2
-        idx = (stimNameAll == stimLabels(s));
-        cvals = unique(contrastAll(idx));
-        cvals = sort(cvals(:)');
-        if numel(cvals) ~= 2
-            error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
-        end
-        contrastValuesByStim.(char(stimLabels(s))) = cvals;
-    end
+    stimCode = find(strcmp(cellstr(stimLabels), char(currStim)), 1);
+    sizeCode = find(sizeVals == currSize, 1);
+    currContrastLevels = contrastValuesByStim.(char(currStim));
+    contrastCode = find(currContrastLevels == currContrast, 1);
+    stimDirCode = find(dirVals == currDir, 1);
 
-    dirVals = unique(effDirAll);
-    dirVals = sort(dirVals(:)');
-    if numel(dirVals) ~= 2
-        error('Expected exactly 2 effective direction values in condition_full.');
-    end
+    panelCondIndex = (stimCode - 1) * 4 + (sizeCode - 1) * 2 + contrastCode;
 
-    stimDirLabels = {'stim_dir1', 'stim_dir2'};
-    condLabels = { ...
-        'grating-small-low', 'grating-small-high', ...
-        'grating-large-low', 'grating-large-high', ...
-        'plaid-small-low',   'plaid-small-high', ...
-        'plaid-large-low',   'plaid-large-high'};
-    condShortLabels = { ...
-        'G-S-L', 'G-S-H', 'G-L-L', 'G-L-H', ...
-        'P-S-L', 'P-S-H', 'P-L-L', 'P-L-H'};
+    entries(ii).conditionId = condID;
+    entries(ii).stimName = char(currStim);
+    entries(ii).stimCode = stimCode;
+    entries(ii).sizeValue = currSize;
+    entries(ii).sizeCode = sizeCode;
+    entries(ii).sizeLabel = ternary_labelLocal(sizeCode, 'small', 'large');
+    entries(ii).contrastValue = currContrast;
+    entries(ii).contrastCode = contrastCode;
+    entries(ii).contrastLabel = ternary_labelLocal(contrastCode, 'low', 'high');
+    entries(ii).stimDirValue = currDir;
+    entries(ii).stimDirCode = stimDirCode;
+    entries(ii).stimDirLabel = stimDirLabels{stimDirCode};
+    entries(ii).panelCondIndex = panelCondIndex;
+    entries(ii).panelCondLabel = condLabels{panelCondIndex};
+    entries(ii).panelCondShortLabel = condShortLabels{panelCondIndex};
+end
 
-    entries = struct([]);
-    for ii = 1:numel(condition_list)
-        condID = condition_list(ii);
-        if condID < 1 || condID > nAll
-            error('Condition ID %d is outside condition_full range.', condID);
-        end
+conditionMap = struct();
+conditionMap.entries = entries;
+conditionMap.meta.stimLabels = cellstr(stimLabels);
+conditionMap.meta.sizeValues = sizeVals;
+conditionMap.meta.contrastValuesByStim = contrastValuesByStim;
+conditionMap.meta.stimDirLabels = stimDirLabels;
+conditionMap.meta.stimDirValues = dirVals;
+conditionMap.meta.panelCondLabels = condLabels;
+conditionMap.meta.panelCondShortLabels = condShortLabels;
 
-        currStim = lower(string(condition_full(condID).stim_name));
-        currSize = condition_full(condID).size;
-        currContrast = condition_full(condID).contrast;
-
-        if currStim == "plaid"
-            currDir = condition_full(condID).plaid_dir;
-        else
-            currDir = condition_full(condID).grating_dir;
-        end
-
-        stimCode = find(strcmp(cellstr(stimLabels), char(currStim)), 1);
-        sizeCode = find(sizeVals == currSize, 1);
-        currContrastLevels = contrastValuesByStim.(char(currStim));
-        contrastCode = find(currContrastLevels == currContrast, 1);
-        stimDirCode = find(dirVals == currDir, 1);
-
-        panelCondIndex = (stimCode - 1) * 4 + (sizeCode - 1) * 2 + contrastCode;
-
-        entries(ii).conditionId = condID;
-        entries(ii).stimName = char(currStim);
-        entries(ii).stimCode = stimCode;
-        entries(ii).sizeValue = currSize;
-        entries(ii).sizeCode = sizeCode;
-        entries(ii).sizeLabel = ternary_labelLocal(sizeCode, 'small', 'large');
-        entries(ii).contrastValue = currContrast;
-        entries(ii).contrastCode = contrastCode;
-        entries(ii).contrastLabel = ternary_labelLocal(contrastCode, 'low', 'high');
-        entries(ii).stimDirValue = currDir;
-        entries(ii).stimDirCode = stimDirCode;
-        entries(ii).stimDirLabel = stimDirLabels{stimDirCode};
-        entries(ii).panelCondIndex = panelCondIndex;
-        entries(ii).panelCondLabel = condLabels{panelCondIndex};
-        entries(ii).panelCondShortLabel = condShortLabels{panelCondIndex};
-    end
-
-    conditionMap = struct();
-    conditionMap.entries = entries;
-    conditionMap.meta.stimLabels = cellstr(stimLabels);
-    conditionMap.meta.sizeValues = sizeVals;
-    conditionMap.meta.contrastValuesByStim = contrastValuesByStim;
-    conditionMap.meta.stimDirLabels = stimDirLabels;
-    conditionMap.meta.stimDirValues = dirVals;
-    conditionMap.meta.panelCondLabels = condLabels;
-    conditionMap.meta.panelCondShortLabels = condShortLabels;
 end
 
 function out = ternary_labelLocal(code, label1, label2)
-    if isempty(code) || ~isfinite(code)
-        out = '';
-    elseif code == 1
-        out = label1;
-    else
-        out = label2;
-    end
+
+if isempty(code) || ~isfinite(code)
+    out = '';
+elseif code == 1
+    out = label1;
+else
+    out = label2;
+end
+
 end
