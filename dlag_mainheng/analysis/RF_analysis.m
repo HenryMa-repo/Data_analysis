@@ -85,7 +85,7 @@ addpath(genpath(fullfile('.', 'utils')));
 %% ----------------------- User parameters -----------------------
 
 root_folder = 'I:\np_data';
-runName = 'RafiL001p0120';
+runName = 'RafiL001p0122';
 runind = 1;              % run index after -g
 probes = [0,1];          % probe indices after -prb
 
@@ -96,9 +96,20 @@ rf_stim_tag = '[RFG_coarse2dg_99_4_150isi]';
 % If [], Step 2 is skipped completely.
 target_stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
+
+%% ----------------------- Build shared session paths -----------------------
+
+run_g = sprintf('%s_g%d', runName, runind);
+destDir = fullfile(root_folder, run_g);
+cat_folder = fullfile(destDir, ['catgt_' run_g]);
+
+fprintf('destDir    : %s\n', destDir);
+fprintf('cat_folder : %s\n', cat_folder);
+fprintf('RF stim tag: %s\n', rf_stim_tag);
+
 % model_data_allruns file for Step 2.
 % Only used when target_stim_tag is not empty.
-dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1\model_data_allruns.mat';
+dat_file = fullfile(cat_folder,'model_data_allruns.mat');
 
 % RF R2 threshold for Step 2.
 RF_R2_threshold = 0.5;
@@ -118,15 +129,6 @@ probe_colors = [
     0.8500, 0.3250, 0.0980
 ];
 
-%% ----------------------- Build shared session paths -----------------------
-
-run_g = sprintf('%s_g%d', runName, runind);
-destDir = fullfile(root_folder, run_g);
-cat_folder = fullfile(destDir, ['catgt_' run_g]);
-
-fprintf('destDir    : %s\n', destDir);
-fprintf('cat_folder : %s\n', cat_folder);
-fprintf('RF stim tag: %s\n', rf_stim_tag);
 
 %% ----------------------- Optional Step 2 setup -----------------------
 
