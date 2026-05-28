@@ -2,12 +2,12 @@
 clc;clear
 % Synthetic data generated from a DLAG model
 % dat_file = 'I:\np_data\RafiL001p0120_g1\catgt_RafiL001p0120_g1/model_data_allruns';
-dat_file = 'I:\np_data\RafiL001p0121_g1\catgt_RafiL001p0121_g1\model_data_allruns';
+dat_file = 'I:\np_data\RafiL001p0122_g1\catgt_RafiL001p0122_g1\model_data_allruns';
 fprintf('Reading from %s \n',dat_file);
 load(dat_file);
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 data_content = 'raw_count';  
-data_condtion=[];
+data_condtion=[1:16];
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition, 
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
@@ -401,6 +401,7 @@ bestm_fname = generate_inference_fname_dlag(runIdx, ...
                                            'baseDir',baseDir);
 
 save(bestm_fname,"bestModel","res","seqEst","varexp","domexp","popcorr","popcov","gp_params","cutoffPC","d_shared")
+close all
 end % ================== LOOP END ==================
 
 
