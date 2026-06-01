@@ -59,7 +59,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'z_across_conditions';
+data_content = 'raw_count';
 % options usually include:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,

@@ -23,12 +23,17 @@
 % Each scatter point is one neuron.
 % Group 1 and Group 2 are plotted using different colors.
 %
-% Output files, if enabled:
+% In each-condition mode, this script also optionally plots one extra
+% pooled-across-conditions R2 figure, using the output from:
+%   calculate_pooled_conditions_R2.m
+%
+% Condition-wise output files, if enabled:
 %   reconstruction_R2_comparison.fig
 %   reconstruction_R2_comparison.png
 %
-% Since each condition has its own output folder, output file names do not
-% include condition IDs or condition labels.
+% Pooled-condition output files, if enabled:
+%   <data_content>_sum_all_conditions_reconstruction_R2_comparison.fig
+%   <data_content>_sum_all_conditions_reconstruction_R2_comparison.png
 
 clc;
 clear;
@@ -37,13 +42,13 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'raw_count';
+data_content = 'z_across_conditions';
 % options usually include:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
 % demean_pooledsd_within_condition
 
-data_condition = [];
+data_condition = [1:16];
 % [] for pooled all-condition mode, or e.g. 1:16 for condition mode.
 
 runIdx = 1;
@@ -52,10 +57,16 @@ runIdx = 1;
 dat_file = fullfile('.', 'model_data_allruns');
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
+% Plot pooled-across-conditions R2 in condition mode.
+% This requires calculate_pooled_conditions_R2.m to have been run first.
+plot_pooled_conditions_R2 = true;
+pooled_r2_file_name = sprintf('%s_sum_all_conditions_reconstruction_R2.mat', data_content);
+pooled_fig_base_name = sprintf('%s_sum_all_conditions_reconstruction_R2_comparison', data_content);
+
 % Save switches
 save_fig = true;
 save_png = true;
-close_after_save = false;
+close_after_save = true;
 
 % Figure options
 figure_visible = 'on';
@@ -84,6 +95,11 @@ probe_colors = [
 %% ------------------------------------------------------------------------
 % Main setup
 % -------------------------------------------------------------------------
+
+scriptDir = fileparts(mfilename('fullpath'));
+if isempty(scriptDir)
+    scriptDir = pwd;
+end
 
 if isempty(data_condition)
     use_condition_mode = false;
@@ -129,7 +145,7 @@ if use_condition_mode
 end
 
 %% ------------------------------------------------------------------------
-% Main loop
+% Main loop: condition-wise or all-condition-mode plots
 % -------------------------------------------------------------------------
 
 for cond_i = 1:numConditions
@@ -196,6 +212,67 @@ for cond_i = 1:numConditions
         pngFile = fullfile(tempfname, 'reconstruction_R2_comparison.png');
         savePngLocal(fig, pngFile, png_dpi);
         fprintf('Saved PNG: %s\n', pngFile);
+    end
+
+    if close_after_save
+        close(fig);
+    end
+end
+
+%% ------------------------------------------------------------------------
+% Extra pooled-across-conditions plot for condition-specific models
+% -------------------------------------------------------------------------
+
+if use_condition_mode && plot_pooled_conditions_R2
+
+    pooledR2File = fullfile(scriptDir, pooled_r2_file_name);
+
+    fprintf('\n============================================================\n');
+    fprintf('Plotting pooled-across-conditions reconstruction R2\n');
+    fprintf('Reading pooled R2 file: %s\n', pooledR2File);
+
+    if ~exist(pooledR2File, 'file')
+        error(['Pooled R2 file not found: %s. ', ...
+            'Run calculate_pooled_conditions_R2.m first.'], pooledR2File);
+    end
+
+    S = load(pooledR2File, 'recon_R2');
+
+    if ~isfield(S, 'recon_R2')
+        error('%s does not contain recon_R2.', pooledR2File);
+    end
+
+    recon_R2 = S.recon_R2;
+
+    checkReconR2FieldsLocal(recon_R2);
+
+    pooledTitleLabel = 'sum all conditions | condition-specific models';
+
+    fig = plotOneReconstructionR2FigureLocal( ...
+        recon_R2, ...
+        pooledTitleLabel, ...
+        probe_colors, ...
+        marker_size, ...
+        use_marker_alpha, ...
+        figure_visible, ...
+        violin_width, ...
+        violin_face_alpha, ...
+        show_violin_median, ...
+        show_violin_points, ...
+        violin_point_size, ...
+        violin_point_jitter_width, ...
+        violin_point_alpha);
+
+    if save_fig
+        figFile = fullfile(scriptDir, [pooled_fig_base_name, '.fig']);
+        savefig(fig, figFile);
+        fprintf('Saved pooled FIG: %s\n', figFile);
+    end
+
+    if save_png
+        pngFile = fullfile(scriptDir, [pooled_fig_base_name, '.png']);
+        savePngLocal(fig, pngFile, png_dpi);
+        fprintf('Saved pooled PNG: %s\n', pngFile);
     end
 
     if close_after_save
@@ -934,7 +1011,6 @@ else
     out = label2;
 end
 end
-
 
 function xJitter = densityAwareJitterLocal(vals, xPos, maxJitterWidth)
 % Density-aware jitter for violin-overlaid points.
