@@ -11,30 +11,33 @@
 %   5) Overwrites the original bestmodel*.mat with the updated seqEst.
 %   6) Saves R2 results separately as reconstruction_R2.mat.
 %
-% Reconstruction fields added to each seqEst(n):
+% Base reconstruction fields added to each seqEst(n):
 %   seqEst(n).yRecon_use_across
 %   seqEst(n).yRecon_use_within
 %   seqEst(n).yRecon_use_all
 %   seqEst(n).yRecon_across_excl_within
 %   seqEst(n).yRecon_within_excl_across
 %
+% Additional sampled-noise fields, if add_R_noise_reconstruction = true:
+%   seqEst(n).yRecon_use_across_with_R
+%   seqEst(n).yRecon_use_within_with_R
+%   seqEst(n).yRecon_use_all_with_R
+%   seqEst(n).yRecon_across_excl_within_with_R
+%   seqEst(n).yRecon_within_excl_across_with_R
+%
+% Additional residual-preserving fields, if add_keep_resid_reconstruction = true:
+%   seqEst(n).yRecon_use_across_keep_resid
+%   seqEst(n).yRecon_use_within_keep_resid
+%   seqEst(n).yRecon_use_all_keep_resid
+%   seqEst(n).yRecon_across_excl_within_keep_resid
+%   seqEst(n).yRecon_within_excl_across_keep_resid
+%
 % R2 output:
-%   reconstruction_R2.mat contains recon_R2, with fields:
-%     recon_R2.use_across.global_all
-%     recon_R2.use_across.global_by_group
-%     recon_R2.use_across.neuron_by_group
-%     recon_R2.use_within.global_all
-%     recon_R2.use_within.global_by_group
-%     recon_R2.use_within.neuron_by_group
-%     recon_R2.use_all.global_all
-%     recon_R2.use_all.global_by_group
-%     recon_R2.use_all.neuron_by_group
-%     recon_R2.across_excl_within.global_all
-%     recon_R2.across_excl_within.global_by_group
-%     recon_R2.across_excl_within.neuron_by_group
-%     recon_R2.within_excl_across.global_all
-%     recon_R2.within_excl_across.global_by_group
-%     recon_R2.within_excl_across.neuron_by_group
+%   reconstruction_R2.mat contains recon_R2.
+%   For each reconstruction type, recon_R2 has:
+%       .global_all
+%       .global_by_group
+%       .neuron_by_group
 %
 % Notes:
 %   - Reconstruction uses internally orthogonalized loading blocks.
@@ -43,6 +46,11 @@
 %   - Completely zero loading blocks are treated as empty.
 %   - Across/within 0-dimensional cases are allowed.
 %   - R2 values are allowed to be negative and are not clipped.
+%   - *_with_R fields are sampled noisy observations from the DLAG
+%     observation model using params.R.
+%   - *_keep_resid fields add the original full-model residual:
+%         residual = seqEst(n).y - seqEst(n).yRecon_use_all
+%     Therefore yRecon_use_all_keep_resid equals seqEst(n).y.
 
 clc;
 clear;
@@ -51,7 +59,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'demean_count_within_trial';
+data_content = 'z_across_conditions';
 % options usually include:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial,
@@ -62,6 +70,14 @@ data_condition = [1:16];
 
 runIdx = 1;
 
+% Additional reconstruction options
+add_R_noise_reconstruction = true;
+add_keep_resid_reconstruction = true;
+
+% Used only when add_R_noise_reconstruction = true.
+% A fixed seed makes *_with_R fields reproducible.
+use_fixed_noise_seed = false;
+noise_seed = 1;
 %% ------------------------------------------------------------------------
 % Main loop setup
 % -------------------------------------------------------------------------
@@ -76,6 +92,13 @@ else
     numConditions = numel(condition_list);
 end
 
+if add_R_noise_reconstruction
+    if use_fixed_noise_seed
+        rng(noise_seed, 'twister');
+    else
+        rng('shuffle');
+    end
+end
 %% ------------------------------------------------------------------------
 % Main loop
 % -------------------------------------------------------------------------
@@ -93,11 +116,13 @@ for cond_i = 1:numConditions
     tempfname = sprintf('%s/mat_results/run%03d', baseDir, runIdx);
 
     fprintf('\n============================================================\n');
+
     if isempty(this_condition)
         fprintf('DLAG data reconstruction: pooled all-condition mode\n');
     else
         fprintf('DLAG data reconstruction: condition %d\n', this_condition);
     end
+
     fprintf('Reading from %s\n', tempfname);
 
     bestFile = findOneFileLocal(tempfname, 'bestmodel*', true);
@@ -132,7 +157,11 @@ for cond_i = 1:numConditions
     end
 
     fprintf('Adding reconstruction fields to seqEst...\n');
-    seqEst = addDlagReconstructionFieldsLocal(seqEst, params);
+    seqEst = addDlagReconstructionFieldsLocal( ...
+        seqEst, ...
+        params, ...
+        add_R_noise_reconstruction, ...
+        add_keep_resid_reconstruction);
 
     fprintf('Computing reconstruction R2...\n');
     recon_R2 = computeReconstructionR2Local(seqEst, params.yDims);
@@ -153,8 +182,9 @@ end
 % Local functions
 % ========================================================================
 
-function seqEst = addDlagReconstructionFieldsLocal(seqEst, params)
-% Add the five requested reconstruction fields to each trial in seqEst.
+function seqEst = addDlagReconstructionFieldsLocal( ...
+    seqEst, params, add_R_noise_reconstruction, add_keep_resid_reconstruction)
+% Add requested reconstruction fields to each trial in seqEst.
 
 params = normalizeParamDimsLocal(params, []);
 
@@ -185,6 +215,16 @@ end
 params.d = params.d(:);
 
 blocks = precomputeReconstructionBlocksLocal(params);
+
+if add_R_noise_reconstruction
+    if ~isfield(params, 'R') || isempty(params.R)
+        error('add_R_noise_reconstruction is true, but params.R is missing or empty.');
+    end
+
+    Rstd = buildDiagonalNoiseStdLocal(params.R, yDim);
+else
+    Rstd = [];
+end
 
 for n = 1:numel(seqEst)
 
@@ -260,11 +300,74 @@ for n = 1:numel(seqEst)
         yRecon_within_excl_across(rows, :) = d_g + Y_within_excl_across;
     end
 
+    % ---------------------------------------------------------------------
+    % Save base noiseless reconstructions
+    % ---------------------------------------------------------------------
+
     seqEst(n).yRecon_use_across = yRecon_use_across;
     seqEst(n).yRecon_use_within = yRecon_use_within;
     seqEst(n).yRecon_use_all = yRecon_use_all;
     seqEst(n).yRecon_across_excl_within = yRecon_across_excl_within;
     seqEst(n).yRecon_within_excl_across = yRecon_within_excl_across;
+
+    % ---------------------------------------------------------------------
+    % Method A: sampled observation noise from params.R
+    %
+    % The same sampled noise matrix is added to all five reconstructions
+    % within the same trial. This keeps comparisons among the five noisy
+    % versions driven by the reconstruction signal, not by different random
+    % noise draws.
+    % ---------------------------------------------------------------------
+
+    if add_R_noise_reconstruction
+        noise_R = repmat(Rstd, 1, T) .* randn(yDim, T);
+
+        seqEst(n).yRecon_use_across_with_R = ...
+            yRecon_use_across + noise_R;
+
+        seqEst(n).yRecon_use_within_with_R = ...
+            yRecon_use_within + noise_R;
+
+        seqEst(n).yRecon_use_all_with_R = ...
+            yRecon_use_all + noise_R;
+
+        seqEst(n).yRecon_across_excl_within_with_R = ...
+            yRecon_across_excl_within + noise_R;
+
+        seqEst(n).yRecon_within_excl_across_with_R = ...
+            yRecon_within_excl_across + noise_R;
+    end
+
+    % ---------------------------------------------------------------------
+    % Method B: keep original full-model residual
+    %
+    % residual = original data - full reconstruction.
+    % Therefore:
+    %   yRecon_use_all_keep_resid == seqEst(n).y
+    %
+    % These fields are original-data-like modified data: they keep the same
+    % full-model residual/noise structure from the original data while
+    % replacing the model-explained signal component.
+    % ---------------------------------------------------------------------
+
+    if add_keep_resid_reconstruction
+        full_resid = seqEst(n).y - yRecon_use_all;
+
+        seqEst(n).yRecon_use_across_keep_resid = ...
+            yRecon_use_across + full_resid;
+
+        seqEst(n).yRecon_use_within_keep_resid = ...
+            yRecon_use_within + full_resid;
+
+        seqEst(n).yRecon_use_all_keep_resid = ...
+            yRecon_use_all + full_resid;
+
+        seqEst(n).yRecon_across_excl_within_keep_resid = ...
+            yRecon_across_excl_within + full_resid;
+
+        seqEst(n).yRecon_within_excl_across_keep_resid = ...
+            yRecon_within_excl_across + full_resid;
+    end
 end
 end
 
@@ -349,10 +452,6 @@ function Y_resid = projectOrthogonalComplementLocal(Y, Q_remove)
 %   P = Q_remove * Q_remove'
 %   Y_resid = (I - P) * Y
 %           = Y - Q_remove * (Q_remove' * Y)
-%
-% This is the same null-space residual idea as the subspace-overlap code,
-% but here the object being projected is reconstruction data rather than
-% another loading subspace basis.
 
 if isempty(Q_remove) || size(Q_remove, 2) == 0
     Y_resid = Y;
@@ -416,18 +515,55 @@ Q = U(:, 1:xDim);
 TT = S(1:xDim, 1:xDim) * V(:, 1:xDim)';
 end
 
+function Rstd = buildDiagonalNoiseStdLocal(R, yDim)
+% Extract observation-noise standard deviations from DLAG params.R.
+%
+% In standard DLAG, params.R is a yDim x yDim diagonal observation-noise
+% covariance matrix. This function checks that format and returns:
+%   Rstd = sqrt(diag(R))
+
+if ~isnumeric(R) || ~ismatrix(R)
+    error('params.R must be a numeric matrix.');
+end
+
+if ~isequal(size(R), [yDim, yDim])
+    error('params.R size is %d x %d, expected %d x %d.', ...
+        size(R, 1), size(R, 2), yDim, yDim);
+end
+
+R = double(R);
+
+if any(~isfinite(R(:)))
+    error('params.R contains non-finite values.');
+end
+
+rvar = diag(R);
+offdiag = R - diag(rvar);
+
+tol = 1e-10 * max(1, max(abs(rvar)));
+
+if max(abs(offdiag(:))) > tol
+    error('params.R is expected to be diagonal, but off-diagonal entries are nonzero.');
+end
+
+if any(rvar < -tol)
+    error('params.R has negative diagonal variance values.');
+end
+
+% Clip tiny negative numerical values to zero.
+rvar(rvar < 0) = 0;
+
+Rstd = sqrt(rvar);
+Rstd = Rstd(:);
+end
+
 function recon_R2 = computeReconstructionR2Local(seqEst, yDims)
 % Compute global, group-wise global, and neuron-wise R2 for each recon field.
 
 yDims = reshape(yDims, 1, []);
 numGroups = numel(yDims);
 
-r2_specs = {
-    'use_across',          'yRecon_use_across';
-    'use_within',          'yRecon_use_within';
-    'use_all',             'yRecon_use_all';
-    'across_excl_within',  'yRecon_across_excl_within';
-    'within_excl_across',  'yRecon_within_excl_across'};
+r2_specs = buildReconstructionR2SpecsLocal(seqEst);
 
 Ytrue = [seqEst.y];
 
@@ -457,6 +593,41 @@ for specIdx = 1:size(r2_specs, 1)
         recon_R2.(r2Name).neuron_by_group{groupIdx} = ...
             computeNeuronR2Local(Ytrue(rows, :), Ypred(rows, :));
     end
+end
+end
+
+function r2_specs = buildReconstructionR2SpecsLocal(seqEst)
+% Build list of reconstruction fields that exist in seqEst.
+
+base_specs = {
+    'use_across',          'yRecon_use_across';
+    'use_within',          'yRecon_use_within';
+    'use_all',             'yRecon_use_all';
+    'across_excl_within',  'yRecon_across_excl_within';
+    'within_excl_across',  'yRecon_within_excl_across'};
+
+with_R_specs = {
+    'use_across_with_R',          'yRecon_use_across_with_R';
+    'use_within_with_R',          'yRecon_use_within_with_R';
+    'use_all_with_R',             'yRecon_use_all_with_R';
+    'across_excl_within_with_R',  'yRecon_across_excl_within_with_R';
+    'within_excl_across_with_R',  'yRecon_within_excl_across_with_R'};
+
+keep_resid_specs = {
+    'use_across_keep_resid',          'yRecon_use_across_keep_resid';
+    'use_within_keep_resid',          'yRecon_use_within_keep_resid';
+    'use_all_keep_resid',             'yRecon_use_all_keep_resid';
+    'across_excl_within_keep_resid',  'yRecon_across_excl_within_keep_resid';
+    'within_excl_across_keep_resid',  'yRecon_within_excl_across_keep_resid'};
+
+r2_specs = base_specs;
+
+if isfield(seqEst, 'yRecon_use_across_with_R')
+    r2_specs = [r2_specs; with_R_specs];
+end
+
+if isfield(seqEst, 'yRecon_use_across_keep_resid')
+    r2_specs = [r2_specs; keep_resid_specs];
 end
 end
 
