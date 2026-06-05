@@ -36,8 +36,6 @@ analysis_field = 'y';
 dat_file = './model_data_allruns.mat';
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 
-primary_effect_metric = 'classic_SI';
-% 'classic_SI','delta_SL','S_norm_diff'
 
 group_names = {};
 
@@ -295,9 +293,6 @@ valid_effect_mask.S_norm_diff = valid_denominator_mask;
 
 valid_metric_names = fieldnames(effect);
 
-if ~isfield(effect, primary_effect_metric)
-    error('primary_effect_metric must be one of: %s', strjoin(valid_metric_names, ', '));
-end
 
 %% ----------------------- Save mat result -----------------------
 
@@ -306,22 +301,10 @@ size_effect_result = struct();
 size_effect_result.analysis_field = analysis_field;
 size_effect_result.response_per_trial = 'sum across all time bins';
 
-size_effect_result.small_size = small_size;
-size_effect_result.large_size = large_size;
-size_effect_result.small_condition_indices = small_condition_indices;
-size_effect_result.large_condition_indices = large_condition_indices;
-
-size_effect_result.n_small_trials = n_small_trials;
-size_effect_result.n_large_trials = n_large_trials;
-
 size_effect_result.metric_formulas.classic_SI = '(S - L) ./ S';
 size_effect_result.metric_formulas.delta_SL = 'S - L';
 size_effect_result.metric_formulas.S_norm_diff = '(S - L) ./ abs(S)';
 
-size_effect_result.primary_effect_metric = primary_effect_metric;
-
-size_effect_result.nUnits = nUnits;
-size_effect_result.nTimeBins = nTimeBins;
 
 for g = 1:nGroups
     rows = group_row_ranges{g};
@@ -329,8 +312,6 @@ for g = 1:nGroups
     size_effect_result.group(g).group_name = group_names{g};
     size_effect_result.group(g).group_index = g;
     size_effect_result.group(g).nUnits = numel(rows);
-    size_effect_result.group(g).row_indices_global = rows(:)';
-    size_effect_result.group(g).unit_index_within_group = (1:numel(rows))';
 
     size_effect_result.group(g).S_response = S_response(rows);
     size_effect_result.group(g).L_response = L_response(rows);
