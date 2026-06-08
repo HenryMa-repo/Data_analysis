@@ -119,6 +119,8 @@ for i = 1:numel(stimsynind)
     else
         gpl(i) = 2;
     end
+
+end
 % Canonicalize component directions before condition grouping.
 % This prevents equivalent angles such as 360/0 or -10/350 from being
 % treated as different conditions downstream.
@@ -127,7 +129,6 @@ stiminfo.dir2 = canonical_angle_deg(stiminfo.dir2, true);
 
 assert_canonical_angle_deg(stiminfo.dir1, 'dir1');
 assert_canonical_angle_deg(stiminfo.dir2, 'dir2');
-end
 
 % plaid direction
 comdir1 = stiminfo.dir1(gpl == 2);
@@ -216,6 +217,9 @@ for i = 1:numel(stimsynind)
     else
         error('fixed_phase must be 0 or 1.');
     end
+
+
+end
 % Canonicalize component directions before condition grouping.
 % This prevents equivalent angles such as 360/0 or -10/350 from being
 % treated as different conditions downstream.
@@ -224,8 +228,6 @@ stiminfo.dir2 = canonical_angle_deg(stiminfo.dir2, true);
 
 assert_canonical_angle_deg(stiminfo.dir1, 'dir1');
 assert_canonical_angle_deg(stiminfo.dir2, 'dir2');
-
-end
 
 % plaid direction
 comdir1 = stiminfo.dir1(gpl == 2);
