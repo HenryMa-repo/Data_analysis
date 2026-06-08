@@ -36,6 +36,16 @@
 % - analysis_fields can contain one or multiple seqEst fields.
 % - Each field is processed independently.
 % - After each field is finished, close all figures.
+%
+% Loading strategy:
+% - all_condition_model:
+%       Load the pooled bestmodel only once, then read all analysis_fields
+%       from the loaded seqEst.
+%
+% - condition_specific_models:
+%       Load one condition model at a time to avoid keeping all condition
+%       models in memory. For each loaded condition, read all analysis_fields
+%       before clearing that condition model.
 % =========================================================================
 
 clc;
@@ -51,7 +61,7 @@ data_content = 'demean_count_within_trial';
 
 % [] means pooled all-condition model.
 % Non-empty means condition-specific models, e.g. 1:16.
-data_condition = [];
+data_condition = [1:16];
 
 runIdx = 1;
 
@@ -135,6 +145,7 @@ if isempty(scriptDir)
 end
 
 analysis_fields = normalize_analysis_fields(analysis_fields);
+nAnalysisFields = numel(analysis_fields);
 
 if isempty(data_condition)
     model_mode = 'all_condition_model';
@@ -237,11 +248,212 @@ end
 fprintf('\nAnalysis fields:\n');
 disp(analysis_fields(:));
 
-%% ----------------------- Loop over analysis fields -----------------------
+%% ----------------------- Initialize per-field accumulation cache -----------------------
 
-for analysisFieldIdx = 1:numel(analysis_fields)
+field_cache = initialize_field_cache(analysis_fields);
 
-    analysis_field = analysis_fields{analysisFieldIdx};
+groupd = [];
+nGroups = [];
+group_names_this = {};
+group_row_ranges = {};
+output_dir = '';
+
+%% ----------------------- Load model(s) once per needed model and accumulate all fields -----------------------
+
+if ~use_condition_specific_models
+
+    %% ----------------------- All-condition pooled model: load once -----------------------
+
+    this_condition = [];
+    [baseDir, runDir, bestmodel_file] = resolve_bestmodel_from_training_settings( ...
+        data_content, this_condition, runIdx);
+
+    output_dir = runDir;
+
+    fprintf('\nUsing baseDir:\n  %s\n', baseDir);
+    fprintf('Using runDir:\n  %s\n', runDir);
+    fprintf('Loading bestmodel once for all analysis fields:\n  %s\n', bestmodel_file);
+
+    [S_best, seqEst] = load_bestmodel_once(bestmodel_file);
+
+    trial_ids = extract_trial_ids(seqEst);
+    condition_index_seq = map_seq_trials_to_conditions( ...
+        this_run, conditions_full, trial_ids);
+
+    if any(condition_index_seq < 1) || any(condition_index_seq > numel(conditions_full))
+        error('condition_index_seq contains invalid condition indices.');
+    end
+
+    trial_size = size_values(condition_index_seq);
+
+    small_trial_mask = trial_size == small_size;
+    large_trial_mask = trial_size == large_size;
+
+    small_trial_indices_in_seqEst = find(small_trial_mask);
+    large_trial_indices_in_seqEst = find(large_trial_mask);
+
+    for f = 1:nAnalysisFields
+        analysis_field = analysis_fields{f};
+
+        fprintf('\nReading seqEst.%s from loaded all-condition model\n', analysis_field);
+
+        [nUnits_this, nTimeBins_this] = validate_seq_field_shape(seqEst, analysis_field);
+
+        if f == 1
+            groupd = get_groupd(S_best, this_run, data_content, nUnits_this);
+            groupd = groupd(:)';
+
+            if sum(groupd) ~= nUnits_this
+                error('sum(groupd) = %d, but seqEst.%s has %d units.', ...
+                    sum(groupd), analysis_field, nUnits_this);
+            end
+
+            nGroups = numel(groupd);
+            group_names_this = normalize_group_names(group_names, nGroups, this_run);
+            [~, ~, group_row_ranges] = build_group_index(groupd);
+        else
+            if nUnits_this ~= sum(groupd)
+                error('seqEst.%s has %d units, expected %d from groupd.', ...
+                    analysis_field, nUnits_this, sum(groupd));
+            end
+        end
+
+        trial_response = compute_trial_response_from_seqEst(seqEst, analysis_field, nUnits_this);
+
+        field_cache(f).nUnits = nUnits_this;
+        field_cache(f).nTimeBins = nTimeBins_this;
+        field_cache(f).small_trial_response = trial_response(:, small_trial_mask);
+        field_cache(f).large_trial_response = trial_response(:, large_trial_mask);
+        field_cache(f).small_trial_condition_index = condition_index_seq(small_trial_mask)';
+        field_cache(f).large_trial_condition_index = condition_index_seq(large_trial_mask)';
+        field_cache(f).small_trial_indices_in_seqEst = small_trial_indices_in_seqEst;
+        field_cache(f).large_trial_indices_in_seqEst = large_trial_indices_in_seqEst;
+
+        field_cache(f).model_source(1).model_mode = model_mode;
+        field_cache(f).model_source(1).condition = [];
+        field_cache(f).model_source(1).baseDir = baseDir;
+        field_cache(f).model_source(1).runDir = runDir;
+        field_cache(f).model_source(1).bestmodel_file = bestmodel_file;
+        field_cache(f).model_source(1).nTrials = numel(seqEst);
+    end
+
+    clear S_best seqEst;
+
+else
+
+    %% ----------------------- Condition-specific models: load one condition at a time -----------------------
+
+    output_dir = scriptDir;
+    first_condition_loaded = false;
+
+    for cc = 1:numel(condition_list)
+
+        this_condition = condition_list(cc);
+        this_condition_size = size_values(this_condition);
+
+        [baseDir, runDir, bestmodel_file] = resolve_bestmodel_from_training_settings( ...
+            data_content, this_condition, runIdx);
+
+        fprintf('\nCondition %d/%d: condition %d, size = %g\n', ...
+            cc, numel(condition_list), this_condition, this_condition_size);
+        fprintf('Using baseDir:\n  %s\n', baseDir);
+        fprintf('Using runDir:\n  %s\n', runDir);
+        fprintf('Loading bestmodel once for all analysis fields:\n  %s\n', bestmodel_file);
+
+        [S_best, seqEst] = load_bestmodel_once(bestmodel_file);
+
+        for f = 1:nAnalysisFields
+            analysis_field = analysis_fields{f};
+
+            fprintf('  Reading seqEst.%s\n', analysis_field);
+
+            [nUnits_this, nTimeBins_this] = validate_seq_field_shape(seqEst, analysis_field);
+
+            if ~first_condition_loaded && f == 1
+                groupd = get_groupd(S_best, this_run, data_content, nUnits_this);
+                groupd = groupd(:)';
+
+                if sum(groupd) ~= nUnits_this
+                    error('sum(groupd) = %d, but seqEst.%s has %d units.', ...
+                        sum(groupd), analysis_field, nUnits_this);
+                end
+
+                nGroups = numel(groupd);
+                group_names_this = normalize_group_names(group_names, nGroups, this_run);
+                [~, ~, group_row_ranges] = build_group_index(groupd);
+            else
+                if nUnits_this ~= sum(groupd)
+                    error('Condition %d seqEst.%s has %d units, expected %d from groupd.', ...
+                        this_condition, analysis_field, nUnits_this, sum(groupd));
+                end
+
+                groupd_this = get_groupd(S_best, this_run, data_content, nUnits_this);
+                groupd_this = groupd_this(:)';
+
+                if ~isequal(groupd_this, groupd)
+                    error('Condition %d has groupd %s, expected %s.', ...
+                        this_condition, mat2str(groupd_this), mat2str(groupd));
+                end
+            end
+
+            if isempty(field_cache(f).nUnits)
+                field_cache(f).nUnits = nUnits_this;
+                field_cache(f).nTimeBins = nTimeBins_this;
+            else
+                if field_cache(f).nUnits ~= nUnits_this || field_cache(f).nTimeBins ~= nTimeBins_this
+                    error(['Condition %d has seqEst.%s size %d x %d, ', ...
+                        'but previous conditions used %d x %d.'], ...
+                        this_condition, analysis_field, nUnits_this, nTimeBins_this, ...
+                        field_cache(f).nUnits, field_cache(f).nTimeBins);
+                end
+            end
+
+            trial_response = compute_trial_response_from_seqEst(seqEst, analysis_field, nUnits_this);
+            n_trials_this = size(trial_response, 2);
+
+            if this_condition_size == small_size
+                field_cache(f).small_trial_response = [ ...
+                    field_cache(f).small_trial_response, trial_response]; %#ok<AGROW>
+                field_cache(f).small_trial_condition_index = [ ...
+                    field_cache(f).small_trial_condition_index, ...
+                    repmat(this_condition, 1, n_trials_this)]; %#ok<AGROW>
+
+            elseif this_condition_size == large_size
+                field_cache(f).large_trial_response = [ ...
+                    field_cache(f).large_trial_response, trial_response]; %#ok<AGROW>
+                field_cache(f).large_trial_condition_index = [ ...
+                    field_cache(f).large_trial_condition_index, ...
+                    repmat(this_condition, 1, n_trials_this)]; %#ok<AGROW>
+
+            else
+                error('Condition %d has unexpected size value %g.', ...
+                    this_condition, this_condition_size);
+            end
+
+            field_cache(f).model_source(cc).model_mode = model_mode; %#ok<SAGROW>
+            field_cache(f).model_source(cc).condition = this_condition;
+            field_cache(f).model_source(cc).condition_size = this_condition_size;
+            field_cache(f).model_source(cc).baseDir = baseDir;
+            field_cache(f).model_source(cc).runDir = runDir;
+            field_cache(f).model_source(cc).bestmodel_file = bestmodel_file;
+            field_cache(f).model_source(cc).nTrials = n_trials_this;
+        end
+
+        first_condition_loaded = true;
+
+        clear S_best seqEst;
+    end
+end
+
+if isempty(groupd)
+    error('groupd was not initialized. No model data were processed.');
+end
+
+%% ----------------------- Process each analysis field from accumulated data -----------------------
+
+for analysisFieldIdx = 1:nAnalysisFields
+
+    analysis_field = field_cache(analysisFieldIdx).analysis_field;
     safe_field = sanitize_filename(analysis_field);
 
     size_effect_base_name = sprintf('%s_%s_size_effect_%s', ...
@@ -254,184 +466,23 @@ for analysisFieldIdx = 1:numel(analysis_fields)
         safe_data_content, model_mode, safe_field);
 
     fprintf('\n============================================================\n');
-    fprintf('Processing analysis field %d/%d: seqEst.%s\n', ...
-        analysisFieldIdx, numel(analysis_fields), analysis_field);
+    fprintf('Processing accumulated analysis field %d/%d: seqEst.%s\n', ...
+        analysisFieldIdx, nAnalysisFields, analysis_field);
     fprintf('============================================================\n');
 
-    %% ----------------------- Load model(s) and pool responses -----------------------
+    small_trial_response = field_cache(analysisFieldIdx).small_trial_response;
+    large_trial_response = field_cache(analysisFieldIdx).large_trial_response;
 
-    small_trial_response = [];
-    large_trial_response = [];
+    small_trial_condition_index = field_cache(analysisFieldIdx).small_trial_condition_index;
+    large_trial_condition_index = field_cache(analysisFieldIdx).large_trial_condition_index;
 
-    small_trial_condition_index = [];
-    large_trial_condition_index = [];
+    small_trial_indices_in_seqEst = field_cache(analysisFieldIdx).small_trial_indices_in_seqEst;
+    large_trial_indices_in_seqEst = field_cache(analysisFieldIdx).large_trial_indices_in_seqEst;
 
-    small_trial_indices_in_seqEst = [];
-    large_trial_indices_in_seqEst = [];
+    model_source = field_cache(analysisFieldIdx).model_source;
 
-    model_source = struct([]);
-
-    groupd = [];
-    nGroups = [];
-    nUnits = [];
-    nTimeBins = [];
-    group_row_ranges = {};
-    output_dir = '';
-
-    if ~use_condition_specific_models
-
-        %% ----------------------- All-condition pooled model -----------------------
-
-        this_condition = [];
-        [baseDir, runDir, bestmodel_file] = resolve_bestmodel_from_training_settings( ...
-            data_content, this_condition, runIdx);
-
-        output_dir = runDir;
-
-        fprintf('\nUsing baseDir:\n  %s\n', baseDir);
-        fprintf('Using runDir:\n  %s\n', runDir);
-        fprintf('Loading bestmodel:\n  %s\n', bestmodel_file);
-
-        [S_best, seqEst, nUnits, nTimeBins] = load_bestmodel_seqEst( ...
-            bestmodel_file, analysis_field);
-
-        fprintf('\nAnalyzing seqEst.%s\n', analysis_field);
-        fprintf('nUnits = %d, nTimeBins = %d\n', nUnits, nTimeBins);
-        fprintf('Response per trial = sum across all time bins.\n');
-
-        %% ----------------------- Get group information -----------------------
-
-        groupd = get_groupd(S_best, this_run, data_content, nUnits);
-        groupd = groupd(:)';
-
-        if sum(groupd) ~= nUnits
-            error('sum(groupd) = %d, but seqEst.%s has %d units.', ...
-                sum(groupd), analysis_field, nUnits);
-        end
-
-        nGroups = numel(groupd);
-        group_names_this = normalize_group_names(group_names, nGroups, this_run);
-        [~, ~, group_row_ranges] = build_group_index(groupd);
-
-        %% ----------------------- Map seqEst trials to conditions -----------------------
-
-        trial_ids = extract_trial_ids(seqEst);
-        condition_index_seq = map_seq_trials_to_conditions( ...
-            this_run, conditions_full, trial_ids);
-
-        if any(condition_index_seq < 1) || any(condition_index_seq > numel(conditions_full))
-            error('condition_index_seq contains invalid condition indices.');
-        end
-
-        trial_size = size_values(condition_index_seq);
-
-        small_trial_mask = trial_size == small_size;
-        large_trial_mask = trial_size == large_size;
-
-        small_trial_indices_in_seqEst = find(small_trial_mask);
-        large_trial_indices_in_seqEst = find(large_trial_mask);
-
-        trial_response = compute_trial_response_from_seqEst(seqEst, analysis_field, nUnits);
-
-        small_trial_response = trial_response(:, small_trial_mask);
-        large_trial_response = trial_response(:, large_trial_mask);
-
-        small_trial_condition_index = condition_index_seq(small_trial_mask)';
-        large_trial_condition_index = condition_index_seq(large_trial_mask)';
-
-        model_source(1).model_mode = model_mode;
-        model_source(1).condition = [];
-        model_source(1).baseDir = baseDir;
-        model_source(1).runDir = runDir;
-        model_source(1).bestmodel_file = bestmodel_file;
-        model_source(1).nTrials = numel(seqEst);
-
-    else
-
-        %% ----------------------- Condition-specific models -----------------------
-
-        output_dir = scriptDir;
-        first_model_loaded = false;
-
-        for cc = 1:numel(condition_list)
-
-            this_condition = condition_list(cc);
-            this_condition_size = size_values(this_condition);
-
-            [baseDir, runDir, bestmodel_file] = resolve_bestmodel_from_training_settings( ...
-                data_content, this_condition, runIdx);
-
-            fprintf('\nCondition %d, size = %g\n', this_condition, this_condition_size);
-            fprintf('Using baseDir:\n  %s\n', baseDir);
-            fprintf('Using runDir:\n  %s\n', runDir);
-            fprintf('Loading bestmodel:\n  %s\n', bestmodel_file);
-
-            [S_best, seqEst, nUnits_this, nTimeBins_this] = load_bestmodel_seqEst( ...
-                bestmodel_file, analysis_field);
-
-            if ~first_model_loaded
-                nUnits = nUnits_this;
-                nTimeBins = nTimeBins_this;
-
-                fprintf('\nAnalyzing seqEst.%s\n', analysis_field);
-                fprintf('nUnits = %d, nTimeBins = %d\n', nUnits, nTimeBins);
-                fprintf('Response per trial = sum across all time bins.\n');
-
-                groupd = get_groupd(S_best, this_run, data_content, nUnits);
-                groupd = groupd(:)';
-
-                if sum(groupd) ~= nUnits
-                    error('sum(groupd) = %d, but seqEst.%s has %d units.', ...
-                        sum(groupd), analysis_field, nUnits);
-                end
-
-                nGroups = numel(groupd);
-                group_names_this = normalize_group_names(group_names, nGroups, this_run);
-                [~, ~, group_row_ranges] = build_group_index(groupd);
-
-                first_model_loaded = true;
-            else
-                if nUnits_this ~= nUnits || nTimeBins_this ~= nTimeBins
-                    error(['Condition %d has seqEst.%s size %d x %d, ', ...
-                        'but previous models used %d x %d.'], ...
-                        this_condition, analysis_field, nUnits_this, nTimeBins_this, ...
-                        nUnits, nTimeBins);
-                end
-
-                groupd_this = get_groupd(S_best, this_run, data_content, nUnits_this);
-                groupd_this = groupd_this(:)';
-
-                if ~isequal(groupd_this, groupd)
-                    error('Condition %d has groupd %s, expected %s.', ...
-                        this_condition, mat2str(groupd_this), mat2str(groupd));
-                end
-            end
-
-            trial_response = compute_trial_response_from_seqEst(seqEst, analysis_field, nUnits);
-            n_trials_this = size(trial_response, 2);
-
-            if this_condition_size == small_size
-                small_trial_response = [small_trial_response, trial_response]; %#ok<AGROW>
-                small_trial_condition_index = [small_trial_condition_index, ...
-                    repmat(this_condition, 1, n_trials_this)]; %#ok<AGROW>
-            elseif this_condition_size == large_size
-                large_trial_response = [large_trial_response, trial_response]; %#ok<AGROW>
-                large_trial_condition_index = [large_trial_condition_index, ...
-                    repmat(this_condition, 1, n_trials_this)]; %#ok<AGROW>
-            else
-                error('Condition %d has unexpected size value %g.', ...
-                    this_condition, this_condition_size);
-            end
-
-            model_source(cc).model_mode = model_mode; %#ok<SAGROW>
-            model_source(cc).condition = this_condition;
-            model_source(cc).condition_size = this_condition_size;
-            model_source(cc).baseDir = baseDir;
-            model_source(cc).runDir = runDir;
-            model_source(cc).bestmodel_file = bestmodel_file;
-            model_source(cc).nTrials = n_trials_this;
-        end
-    end
+    nUnits = field_cache(analysisFieldIdx).nUnits;
+    nTimeBins = field_cache(analysisFieldIdx).nTimeBins;
 
     n_small_trials = size(small_trial_response, 2);
     n_large_trials = size(large_trial_response, 2);
@@ -450,25 +501,25 @@ for analysisFieldIdx = 1:numel(analysis_fields)
 
     fprintf('\nOutput folder:\n  %s\n', output_dir);
 
- %% ----------------------- Compute pooled responses by size -----------------------
+    %% ----------------------- Compute pooled responses by size -----------------------
 
-S_response = mean(small_trial_response, 2, 'omitnan');
-L_response = mean(large_trial_response, 2, 'omitnan');
+    S_response = mean(small_trial_response, 2, 'omitnan');
+    L_response = mean(large_trial_response, 2, 'omitnan');
 
-% Remove tiny numerical residuals in pooled responses before metric calculation.
-% This is important because S_response is used as denominator.
-S_response = force_small_metric_values_to_zero(S_response, response_zero_tolerance);
-L_response = force_small_metric_values_to_zero(L_response, response_zero_tolerance);
+    % Remove tiny numerical residuals in pooled responses before metric calculation.
+    % This is important because S_response is used as denominator.
+    S_response = force_small_metric_values_to_zero(S_response, response_zero_tolerance);
+    L_response = force_small_metric_values_to_zero(L_response, response_zero_tolerance);
 
-S_response_std = std(small_trial_response, 0, 2, 'omitnan');
-L_response_std = std(large_trial_response, 0, 2, 'omitnan');
+    S_response_std = std(small_trial_response, 0, 2, 'omitnan');
+    L_response_std = std(large_trial_response, 0, 2, 'omitnan');
 
-S_response_sem = S_response_std ./ sqrt(sum(isfinite(small_trial_response), 2));
-L_response_sem = L_response_std ./ sqrt(sum(isfinite(large_trial_response), 2));
+    S_response_sem = S_response_std ./ sqrt(sum(isfinite(small_trial_response), 2));
+    L_response_sem = L_response_std ./ sqrt(sum(isfinite(large_trial_response), 2));
 
-if any(isnan(S_response)) || any(isnan(L_response))
-    warning('NaN found in computed S_response or L_response. Please inspect seqEst.%s.', analysis_field);
-end
+    if any(isnan(S_response)) || any(isnan(L_response))
+        warning('NaN found in computed S_response or L_response. Please inspect seqEst.%s.', analysis_field);
+    end
 
     %% ----------------------- Compute metrics -----------------------
 
@@ -539,9 +590,13 @@ end
     size_effect_result.metric_formulas.classic_SI = '(S - L) ./ S';
     size_effect_result.metric_formulas.delta_SL = 'S - L';
     size_effect_result.metric_formulas.S_norm_diff = '(S - L) ./ abs(S)';
+
+    size_effect_result.response_zero_tolerance = response_zero_tolerance;
     size_effect_result.metric_zero_tolerance = metric_zero_tolerance;
-    size_effect_result.metric_zero_rule = ...
-        'Finite metric values with abs(value) < metric_zero_tolerance are forced to exactly 0.';
+    size_effect_result.zero_tolerance_rule = ...
+        ['Finite S_response and L_response values with abs(value) < response_zero_tolerance ', ...
+         'are forced to exactly 0 before metric calculation. Finite metric values with ', ...
+         'abs(value) < metric_zero_tolerance are forced to exactly 0 after metric calculation.'];
 
     size_effect_result.S_response = S_response;
     size_effect_result.L_response = L_response;
@@ -700,6 +755,26 @@ function analysis_fields = normalize_analysis_fields(analysis_fields)
     end
 end
 
+function cache = initialize_field_cache(analysis_fields)
+    nFields = numel(analysis_fields);
+
+    cache = repmat(struct( ...
+        'analysis_field', '', ...
+        'small_trial_response', [], ...
+        'large_trial_response', [], ...
+        'small_trial_condition_index', [], ...
+        'large_trial_condition_index', [], ...
+        'small_trial_indices_in_seqEst', [], ...
+        'large_trial_indices_in_seqEst', [], ...
+        'model_source', struct([]), ...
+        'nUnits', [], ...
+        'nTimeBins', []), 1, nFields);
+
+    for f = 1:nFields
+        cache(f).analysis_field = analysis_fields{f};
+    end
+end
+
 function condition_list = validate_condition_list(data_condition)
     condition_list = data_condition;
 
@@ -772,9 +847,7 @@ function [baseDir, runDir, bestmodel_file] = resolve_bestmodel_from_training_set
     bestmodel_file = fullfile(runDir, files(newestIdx).name);
 end
 
-function [S_best, seqEst, nUnits, nTimeBins] = load_bestmodel_seqEst( ...
-    bestmodel_file, analysis_field)
-
+function [S_best, seqEst] = load_bestmodel_once(bestmodel_file)
     S_best = load(bestmodel_file);
 
     if ~isfield(S_best, 'seqEst')
@@ -786,16 +859,14 @@ function [S_best, seqEst, nUnits, nTimeBins] = load_bestmodel_seqEst( ...
     if isempty(seqEst)
         error('seqEst is empty in bestmodel file: %s', bestmodel_file);
     end
+end
 
+function [nUnits, nTimeBins] = validate_seq_field_shape(seqEst, analysis_field)
     if ~isfield(seqEst, analysis_field)
         error('Field seqEst.%s not found. Choose another analysis_field.', ...
             analysis_field);
     end
 
-    [nUnits, nTimeBins] = validate_seq_field_shape(seqEst, analysis_field);
-end
-
-function [nUnits, nTimeBins] = validate_seq_field_shape(seqEst, analysis_field)
     y0 = seqEst(1).(analysis_field);
 
     if ~isnumeric(y0) || ndims(y0) ~= 2
@@ -1445,7 +1516,7 @@ function x = force_small_metric_values_to_zero(x, tol)
     end
 
     if ~isscalar(tol) || ~isnumeric(tol) || ~isfinite(tol) || tol < 0
-        error('metric_zero_tolerance must be a finite nonnegative scalar.');
+        error('zero tolerance must be a finite nonnegative scalar.');
     end
 
     finite_small_mask = isfinite(x) & abs(x) < tol;
