@@ -119,14 +119,23 @@ for i = 1:numel(stimsynind)
     else
         gpl(i) = 2;
     end
+% Canonicalize component directions before condition grouping.
+% This prevents equivalent angles such as 360/0 or -10/350 from being
+% treated as different conditions downstream.
+stiminfo.dir1 = canonical_angle_deg(stiminfo.dir1, true);
+stiminfo.dir2 = canonical_angle_deg(stiminfo.dir2, true);
 
+assert_canonical_angle_deg(stiminfo.dir1, 'dir1');
+assert_canonical_angle_deg(stiminfo.dir2, 'dir2');
 end
 
 % plaid direction
 comdir1 = stiminfo.dir1(gpl == 2);
 comdir2 = stiminfo.dir2(gpl == 2);
-pldir = round(mod(atan2d(sind(comdir1) + sind(comdir2), ...
-    cosd(comdir1) + cosd(comdir2)), 360));
+pldir = canonical_angle_deg( ...
+    atan2d(sind(comdir1) + sind(comdir2), ...
+           cosd(comdir1) + cosd(comdir2)), ...
+    true);
 
 % output fields
 stiminfo.condition_ids = (1:numel(stiminfo.dir1))';
@@ -144,7 +153,8 @@ stiminfo.grating_dir(gpl == 1) = stiminfo.dir1(gpl == 1);
 stiminfo.plaid_dir = NaN(numel(stimsynind), 1);
 stiminfo.plaid_dir(gpl == 2) = pldir;
 
-
+assert_canonical_angle_deg(stiminfo.grating_dir, 'grating_dir');
+assert_canonical_angle_deg(stiminfo.plaid_dir, 'plaid_dir');
 end
 
 %%
@@ -206,14 +216,24 @@ for i = 1:numel(stimsynind)
     else
         error('fixed_phase must be 0 or 1.');
     end
+% Canonicalize component directions before condition grouping.
+% This prevents equivalent angles such as 360/0 or -10/350 from being
+% treated as different conditions downstream.
+stiminfo.dir1 = canonical_angle_deg(stiminfo.dir1, true);
+stiminfo.dir2 = canonical_angle_deg(stiminfo.dir2, true);
+
+assert_canonical_angle_deg(stiminfo.dir1, 'dir1');
+assert_canonical_angle_deg(stiminfo.dir2, 'dir2');
+
 end
 
 % plaid direction
 comdir1 = stiminfo.dir1(gpl == 2);
 comdir2 = stiminfo.dir2(gpl == 2);
-pldir = round(mod(atan2d(sind(comdir1) + sind(comdir2), ...
-    cosd(comdir1) + cosd(comdir2)), 360));
-
+pldir = canonical_angle_deg( ...
+    atan2d(sind(comdir1) + sind(comdir2), ...
+           cosd(comdir1) + cosd(comdir2)), ...
+    true);
 % output fields
 stiminfo.condition_ids = (1:numel(stiminfo.dir1))';
 
@@ -229,6 +249,9 @@ stiminfo.grating_dir(gpl == 1) = stiminfo.dir1(gpl == 1);
 % plaid_dir: only available for plaid trials
 stiminfo.plaid_dir = NaN(numel(stimsynind), 1);
 stiminfo.plaid_dir(gpl == 2) = pldir;
+
+assert_canonical_angle_deg(stiminfo.grating_dir, 'grating_dir');
+assert_canonical_angle_deg(stiminfo.plaid_dir, 'plaid_dir');
 
 end
 
@@ -308,3 +331,43 @@ end
 
 
 
+function a = canonical_angle_deg(a, doRound)
+% Convert angles in degrees to canonical [0, 360).
+%
+% Examples:
+%   360  -> 0
+%   -10  -> 350
+%   720  -> 0
+%   NaN  -> NaN
+%
+% doRound = true is recommended for stimulus condition labels when
+% directions are intended to be integer degrees.
+
+if nargin < 2
+    doRound = false;
+end
+
+if doRound
+    a = round(a);
+end
+
+a = mod(a, 360);
+
+% Remove tiny numerical residue around 0.
+tol = 1e-10;
+a(abs(a) < tol) = 0;
+a(abs(a - 360) < tol) = 0;
+
+end
+
+
+function assert_canonical_angle_deg(a, fieldName)
+% Check that finite angles are in [0, 360).
+
+finiteVals = a(isfinite(a));
+
+if any(finiteVals < 0 | finiteVals >= 360)
+    error('Field %s contains non-canonical angles outside [0, 360).', fieldName);
+end
+
+end

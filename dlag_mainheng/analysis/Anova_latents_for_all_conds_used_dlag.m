@@ -17,7 +17,7 @@ fprintf('Reading from %s \n', dat_file);
 load(dat_file);
 
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
-data_content = 'z_across_conditions';
+data_content = 'demean_count_within_trial';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial, demean_fr_within_trial, demean_pooledsd_within_condition
@@ -56,9 +56,9 @@ files = dir(fullfile(tempfname, 'bestmodel*'));
 filename = fullfile(tempfname, files(1).name);
 load(filename, "seqEst")
 
-Results = analyze_dlag_latents_by_condition( ...
-    condition_full, seqEst, bestModel.xDim_across, bestModel.xDim_within, ...
-    gp_params, ambiguousIdxs, DSL, tempfname);
+% Results = analyze_dlag_latents_by_condition( ...
+%     condition_full, seqEst, bestModel.xDim_across, bestModel.xDim_within, ...
+%     gp_params, ambiguousIdxs, DSL, tempfname);
 
 Results_split_by_dir = analyze_dlag_latents_by_condition_split_by_dir( ...
     condition_full, seqEst, bestModel.xDim_across, bestModel.xDim_within, ...
@@ -335,184 +335,188 @@ end
 % =========================================================================
 function trialMeta = build_trial_metadata(condition_full, seqEst, includeStimDir)
 
-    if nargin < 3 || isempty(includeStimDir)
-        includeStimDir = false;
-    end
-
-    Ntr = numel(seqEst);
-
-    if isfield(seqEst, 'trialId')
-        trialId = [seqEst.trialId]';
-    else
-        trialId = (1:Ntr)';
-    end
-
-    stimName     = strings(Ntr, 1);
-    sizeValue    = nan(Ntr, 1);
-    contrastRaw  = nan(Ntr, 1);
-    effectiveDir = nan(Ntr, 1);
-
-    for k = 1:numel(condition_full)
-        if ~isfield(condition_full(k), 'trial_indices')
-            error('condition_full(%d) is missing field trial_indices.', k);
-        end
-
-        theseIds = condition_full(k).trial_indices(:);
-        tf = ismember(trialId, theseIds);
-
-        currStim = lower(string(condition_full(k).stim_name));
-        stimName(tf) = currStim;
-        sizeValue(tf) = condition_full(k).size;
-        contrastRaw(tf) = condition_full(k).contrast;
-
-        if includeStimDir
-            if strcmp(currStim, "plaid")
-                if ~isfield(condition_full(k), 'plaid_dir')
-                    error('condition_full(%d) is plaid but missing field plaid_dir.', k);
-                end
-                effectiveDir(tf) = condition_full(k).plaid_dir;
-            elseif strcmp(currStim, "grating")
-                if ~isfield(condition_full(k), 'grating_dir')
-                    error('condition_full(%d) is grating but missing field grating_dir.', k);
-                end
-                effectiveDir(tf) = condition_full(k).grating_dir;
-            else
-                error('Unsupported stim_name found: %s', char(currStim));
-            end
-        end
-    end
-
-    assigned = (stimName ~= "") & ~isnan(sizeValue) & ~isnan(contrastRaw);
-    if includeStimDir
-        assigned = assigned & ~isnan(effectiveDir);
-    end
-
-    if any(~assigned)
-        warning('Some seqEst trials could not be assigned completely. They will be excluded.');
-    end
-
-    % Stim order: grating first, plaid second when both exist
-    allStim = unique(stimName(assigned), 'stable');
-    allStim = lower(allStim);
-
-    if all(ismember(["grating","plaid"], allStim))
-        stimLabels = ["grating","plaid"];
-    else
-        if numel(allStim) ~= 2
-            error('Expected exactly 2 stim levels after assignment.');
-        end
-        stimLabels = allStim(:)';
-    end
-
-    stimCode = nan(Ntr, 1);
-    for s = 1:2
-        stimCode(stimName == stimLabels(s)) = s;
-    end
-
-    % Size mapping: low numeric value = small, high numeric value = large
-    sizeVals = unique(sizeValue(assigned));
-    sizeVals = sort(sizeVals(:)');
-    if numel(sizeVals) ~= 2
-        error('Expected exactly 2 size values.');
-    end
-
-    sizeCode = nan(Ntr, 1);
-    sizeCode(sizeValue == sizeVals(1)) = 1;
-    sizeCode(sizeValue == sizeVals(2)) = 2;
-
-    % Contrast mapping: low/high within each stim_name separately
-    contrastCode = nan(Ntr, 1);
-    contrastValuesByStim = struct();
-
-    for s = 1:2
-        idx = assigned & (stimCode == s);
-        cvals = unique(contrastRaw(idx));
-        cvals = sort(cvals(:)');
-        if numel(cvals) ~= 2
-            error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
-        end
-
-        contrastCode(idx & contrastRaw == cvals(1)) = 1;
-        contrastCode(idx & contrastRaw == cvals(2)) = 2;
-        contrastValuesByStim.(char(stimLabels(s))) = cvals;
-    end
-
-    stimDirCode = nan(Ntr, 1);
-    stimDirLabels = {};
-    stimDirValues = [];
-
-    if includeStimDir
-        dirVals = unique(effectiveDir(assigned));
-        dirVals = sort(dirVals(:)');
-
-        if numel(dirVals) ~= 2
-            error('Expected exactly 2 effective stimulus direction values.');
-        end
-
-        stimDirLabels = {'stim_dir1', 'stim_dir2'};
-        tol = max(1e-10, 1e-8 * max(1, max(abs(dirVals))));
-        stimDirCode(abs(effectiveDir - dirVals(1)) < tol) = 1;
-        stimDirCode(abs(effectiveDir - dirVals(2)) < tol) = 2;
-        stimDirValues = dirVals;
-    end
-
-    valid = assigned & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode);
-    if includeStimDir
-        valid = valid & isfinite(stimDirCode);
-    end
-
-    condIdx = nan(Ntr, 1);
-    condIdx(valid) = (stimCode(valid)-1) * 4 + (sizeCode(valid)-1) * 2 + contrastCode(valid);
-
-    condLabels = { ...
-        'grating-small-low'
-        'grating-small-high'
-        'grating-large-low'
-        'grating-large-high'
-        'plaid-small-low'
-        'plaid-small-high'
-        'plaid-large-low'
-        'plaid-large-high'};
-
-    condShortLabels = { ...
-        'G-S-L'
-        'G-S-H'
-        'G-L-L'
-        'G-L-H'
-        'P-S-L'
-        'P-S-H'
-        'P-L-L'
-        'P-L-H'};
-
-    barX = [1 2 4 5 8 9 11 12];
-
-    trialMeta = struct();
-    trialMeta.trialId = trialId;
-    trialMeta.stimName = cellstr(stimName);
-    trialMeta.stimCode = stimCode;
-    trialMeta.stimLabels = cellstr(stimLabels);
-
-    trialMeta.sizeValue = sizeValue;
-    trialMeta.sizeCode = sizeCode;
-    trialMeta.sizeValues = sizeVals;
-
-    trialMeta.contrastRaw = contrastRaw;
-    trialMeta.contrastCode = contrastCode;
-    trialMeta.contrastValuesByStim = contrastValuesByStim;
-
-    trialMeta.effectiveDirValue = effectiveDir;
-    trialMeta.stimDirCode = stimDirCode;
-    trialMeta.stimDirLabels = stimDirLabels;
-    trialMeta.stimDirValues = stimDirValues;
-
-    trialMeta.valid = valid;
-    trialMeta.condIdx = condIdx;
-
-    trialMeta.condLabels = condLabels;
-    trialMeta.condShortLabels = condShortLabels;
-    trialMeta.barX = barX;
+if nargin < 3 || isempty(includeStimDir)
+    includeStimDir = false;
 end
 
+Ntr = numel(seqEst);
+
+if isfield(seqEst, 'trialId')
+    trialId = [seqEst.trialId]';
+else
+    trialId = (1:Ntr)';
+end
+
+stimName = strings(Ntr, 1);
+sizeValue = nan(Ntr, 1);
+contrastRaw = nan(Ntr, 1);
+effectiveDir = nan(Ntr, 1);
+
+for k = 1:numel(condition_full)
+    if ~isfield(condition_full(k), 'trial_indices')
+        error('condition_full(%d) is missing field trial_indices.', k);
+    end
+    if ~isfield(condition_full(k), 'stim_name')
+        error('condition_full(%d) is missing field stim_name.', k);
+    end
+    if ~isfield(condition_full(k), 'size')
+        error('condition_full(%d) is missing field size.', k);
+    end
+    if ~isfield(condition_full(k), 'contrast')
+        error('condition_full(%d) is missing field contrast.', k);
+    end
+
+    theseIds = condition_full(k).trial_indices(:);
+    tf = ismember(trialId, theseIds);
+
+    currStim = lower(string(condition_full(k).stim_name));
+
+    stimName(tf) = currStim;
+    sizeValue(tf) = condition_full(k).size;
+    contrastRaw(tf) = condition_full(k).contrast;
+
+    if includeStimDir
+        effectiveDir(tf) = getConditionEffectiveDirCanonicalLocal(condition_full(k), k);
+    end
+end
+
+assigned = (stimName ~= "") & ~isnan(sizeValue) & ~isnan(contrastRaw);
+
+if includeStimDir
+    assigned = assigned & ~isnan(effectiveDir);
+end
+
+if any(~assigned)
+    warning('Some seqEst trials could not be assigned completely. They will be excluded.');
+end
+
+% Stim order: grating first, plaid second when both exist.
+allStim = unique(stimName(assigned), 'stable');
+allStim = lower(allStim);
+
+if all(ismember(["grating", "plaid"], allStim))
+    stimLabels = ["grating", "plaid"];
+else
+    if numel(allStim) ~= 2
+        error('Expected exactly 2 stim levels after assignment.');
+    end
+    stimLabels = allStim(:)';
+end
+
+stimCode = nan(Ntr, 1);
+
+for s = 1:2
+    stimCode(stimName == stimLabels(s)) = s;
+end
+
+% Size mapping: low numeric value = small, high numeric value = large.
+sizeVals = unique(sizeValue(assigned));
+sizeVals = sort(sizeVals(:)');
+
+if numel(sizeVals) ~= 2
+    error('Expected exactly 2 size values.');
+end
+
+sizeCode = nan(Ntr, 1);
+sizeCode(sizeValue == sizeVals(1)) = 1;
+sizeCode(sizeValue == sizeVals(2)) = 2;
+
+% Contrast mapping: low/high within each stim_name separately.
+contrastCode = nan(Ntr, 1);
+contrastValuesByStim = struct();
+
+for s = 1:2
+    idx = assigned & (stimCode == s);
+
+    cvals = unique(contrastRaw(idx));
+    cvals = sort(cvals(:)');
+
+    if numel(cvals) ~= 2
+        error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
+    end
+
+    contrastCode(idx & contrastRaw == cvals(1)) = 1;
+    contrastCode(idx & contrastRaw == cvals(2)) = 2;
+
+    contrastValuesByStim.(char(stimLabels(s))) = cvals;
+end
+
+stimDirCode = nan(Ntr, 1);
+stimDirLabels = {};
+stimDirValues = [];
+
+if includeStimDir
+    % effectiveDir has already been canonicalized to [0, 360).
+    % This prevents equivalent angles such as 360/0 and -10/350 from
+    % creating extra direction levels in old, non-normalized datasets.
+    dirVals = unique(effectiveDir(assigned));
+    dirVals = sort(dirVals(:)');
+
+    if numel(dirVals) ~= 2
+        error('Expected exactly 2 effective canonical stimulus direction values, found %d: %s.', ...
+            numel(dirVals), mat2str(dirVals));
+    end
+
+    stimDirLabels = {'stim_dir1', 'stim_dir2'};
+
+    tol = max(1e-10, 1e-8 * max(1, max(abs(dirVals))));
+
+    stimDirCode(abs(effectiveDir - dirVals(1)) < tol) = 1;
+    stimDirCode(abs(effectiveDir - dirVals(2)) < tol) = 2;
+
+    stimDirValues = dirVals;
+end
+
+valid = assigned & isfinite(stimCode) & isfinite(sizeCode) & isfinite(contrastCode);
+
+if includeStimDir
+    valid = valid & isfinite(stimDirCode);
+end
+
+condIdx = nan(Ntr, 1);
+condIdx(valid) = (stimCode(valid)-1) * 4 + (sizeCode(valid)-1) * 2 + contrastCode(valid);
+
+condLabels = { ...
+    'grating-small-low' 'grating-small-high' ...
+    'grating-large-low' 'grating-large-high' ...
+    'plaid-small-low' 'plaid-small-high' ...
+    'plaid-large-low' 'plaid-large-high'};
+
+condShortLabels = { ...
+    'G-S-L' 'G-S-H' 'G-L-L' 'G-L-H' ...
+    'P-S-L' 'P-S-H' 'P-L-L' 'P-L-H'};
+
+barX = [1 2 4 5 8 9 11 12];
+
+trialMeta = struct();
+
+trialMeta.trialId = trialId;
+
+trialMeta.stimName = cellstr(stimName);
+trialMeta.stimCode = stimCode;
+trialMeta.stimLabels = cellstr(stimLabels);
+
+trialMeta.sizeValue = sizeValue;
+trialMeta.sizeCode = sizeCode;
+trialMeta.sizeValues = sizeVals;
+
+trialMeta.contrastRaw = contrastRaw;
+trialMeta.contrastCode = contrastCode;
+trialMeta.contrastValuesByStim = contrastValuesByStim;
+
+trialMeta.effectiveDirValue = effectiveDir;
+trialMeta.stimDirCode = stimDirCode;
+trialMeta.stimDirLabels = stimDirLabels;
+trialMeta.stimDirValues = stimDirValues;
+
+trialMeta.valid = valid;
+trialMeta.condIdx = condIdx;
+
+trialMeta.condLabels = condLabels;
+trialMeta.condShortLabels = condShortLabels;
+trialMeta.barX = barX;
+
+end
 % =========================================================================
 % Classify across latents into feedforward / feedback / ambiguous
 % =========================================================================
@@ -1802,3 +1806,67 @@ function s = format_value(v)
         s = sprintf('%.4g', v);
     end
 end
+
+function d = getConditionEffectiveDirCanonicalLocal(cond, condID)
+% Return canonical effective stimulus direction for one condition.
+%
+% This is an after-the-fact correction for model_data generated before
+% angle normalization was added upstream. It makes equivalent angles such as
+% 360/0 and -10/350 identical during downstream split-by-direction analysis.
+
+if nargin < 2
+    condID = NaN;
+end
+
+if ~isfield(cond, 'stim_name')
+    error('condition_full(%d) missing field stim_name.', condID);
+end
+
+currStim = lower(string(cond.stim_name));
+
+if currStim == "grating"
+    if ~isfield(cond, 'grating_dir')
+        error('condition_full(%d) is grating but missing field grating_dir.', condID);
+    end
+    d = cond.grating_dir;
+
+elseif currStim == "plaid"
+    if ~isfield(cond, 'plaid_dir')
+        error('condition_full(%d) is plaid but missing field plaid_dir.', condID);
+    end
+    d = cond.plaid_dir;
+
+else
+    error('Unsupported stim_name in condition_full(%d): %s', condID, char(currStim));
+end
+
+d = canonicalAngle360Local(d);
+
+end
+
+
+function a = canonicalAngle360Local(a)
+% Convert degree angles to canonical [0, 360).
+%
+% Examples:
+%   360  -> 0
+%   -10  -> 350
+%   720  -> 0
+%
+% NaN remains NaN.
+
+a = double(a);
+finiteMask = isfinite(a);
+
+a(finiteMask) = mod(a(finiteMask), 360);
+
+tol = 1e-10;
+
+nearInteger = finiteMask & abs(a - round(a)) < tol;
+a(nearInteger) = round(a(nearInteger));
+
+a(finiteMask & abs(a) < tol) = 0;
+a(finiteMask & abs(a - 360) < tol) = 0;
+
+end
+
