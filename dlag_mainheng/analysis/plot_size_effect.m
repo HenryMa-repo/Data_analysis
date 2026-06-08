@@ -84,7 +84,13 @@ runIdx = 1;
 %   yRecon_use_all_keep_resid
 %   yRecon_across_excl_within_keep_resid
 %   yRecon_within_excl_across_keep_resid
-analysis_fields = {'y','yRecon_use_across','yRecon_use_within','yRecon_use_all','yRecon_across_excl_within','yRecon_within_excl_across'};
+analysis_fields = { ...
+    'y', ...
+    'yRecon_use_across', ...
+    'yRecon_use_within', ...
+    'yRecon_use_all', ...
+    'yRecon_across_excl_within', ...
+    'yRecon_within_excl_across'};
 
 dat_file = './model_data_allruns.mat';
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
@@ -101,6 +107,13 @@ save_result_mat = true;
 plot_fullrange = false;
 plot_brokenaxis = true;
 plot_metric_hist = true;
+
+% Response and metric cleanup.
+% Finite values with abs(value) < tolerance are forced to exactly 0.
+% response_zero_tolerance is applied before metric calculation.
+% metric_zero_tolerance is applied after metric calculation.
+response_zero_tolerance = 1e-10;
+metric_zero_tolerance = 1e-10;
 
 % Figure options.
 fig_position = [100 100 1800 700];
@@ -437,25 +450,30 @@ for analysisFieldIdx = 1:numel(analysis_fields)
 
     fprintf('\nOutput folder:\n  %s\n', output_dir);
 
-    %% ----------------------- Compute pooled responses by size -----------------------
+ %% ----------------------- Compute pooled responses by size -----------------------
 
-    S_response = mean(small_trial_response, 2, 'omitnan');
-    L_response = mean(large_trial_response, 2, 'omitnan');
+S_response = mean(small_trial_response, 2, 'omitnan');
+L_response = mean(large_trial_response, 2, 'omitnan');
 
-    S_response_std = std(small_trial_response, 0, 2, 'omitnan');
-    L_response_std = std(large_trial_response, 0, 2, 'omitnan');
+% Remove tiny numerical residuals in pooled responses before metric calculation.
+% This is important because S_response is used as denominator.
+S_response = force_small_metric_values_to_zero(S_response, response_zero_tolerance);
+L_response = force_small_metric_values_to_zero(L_response, response_zero_tolerance);
 
-    S_response_sem = S_response_std ./ sqrt(sum(isfinite(small_trial_response), 2));
-    L_response_sem = L_response_std ./ sqrt(sum(isfinite(large_trial_response), 2));
+S_response_std = std(small_trial_response, 0, 2, 'omitnan');
+L_response_std = std(large_trial_response, 0, 2, 'omitnan');
 
-    if any(isnan(S_response)) || any(isnan(L_response))
-        warning('NaN found in computed S_response or L_response. Please inspect seqEst.%s.', analysis_field);
-    end
+S_response_sem = S_response_std ./ sqrt(sum(isfinite(small_trial_response), 2));
+L_response_sem = L_response_std ./ sqrt(sum(isfinite(large_trial_response), 2));
+
+if any(isnan(S_response)) || any(isnan(L_response))
+    warning('NaN found in computed S_response or L_response. Please inspect seqEst.%s.', analysis_field);
+end
 
     %% ----------------------- Compute metrics -----------------------
 
     valid_delta_mask = isfinite(S_response) & isfinite(L_response);
-    valid_denominator_mask = valid_delta_mask & abs(S_response) > eps;
+    valid_denominator_mask = valid_delta_mask & abs(S_response) > response_zero_tolerance;
 
     classic_SI = nan(nUnits, 1);
     delta_SL = nan(nUnits, 1);
@@ -464,6 +482,12 @@ for analysisFieldIdx = 1:numel(analysis_fields)
     delta_SL(valid_delta_mask) = S_response(valid_delta_mask) - L_response(valid_delta_mask);
     classic_SI(valid_denominator_mask) = delta_SL(valid_denominator_mask) ./ S_response(valid_denominator_mask);
     S_norm_diff(valid_denominator_mask) = delta_SL(valid_denominator_mask) ./ abs(S_response(valid_denominator_mask));
+
+    % Remove tiny numerical residuals in metrics.
+    % NaN and Inf are preserved.
+    delta_SL = force_small_metric_values_to_zero(delta_SL, metric_zero_tolerance);
+    classic_SI = force_small_metric_values_to_zero(classic_SI, metric_zero_tolerance);
+    S_norm_diff = force_small_metric_values_to_zero(S_norm_diff, metric_zero_tolerance);
 
     effect = struct();
     effect.classic_SI = classic_SI;
@@ -515,6 +539,9 @@ for analysisFieldIdx = 1:numel(analysis_fields)
     size_effect_result.metric_formulas.classic_SI = '(S - L) ./ S';
     size_effect_result.metric_formulas.delta_SL = 'S - L';
     size_effect_result.metric_formulas.S_norm_diff = '(S - L) ./ abs(S)';
+    size_effect_result.metric_zero_tolerance = metric_zero_tolerance;
+    size_effect_result.metric_zero_rule = ...
+        'Finite metric values with abs(value) < metric_zero_tolerance are forced to exactly 0.';
 
     size_effect_result.S_response = S_response;
     size_effect_result.L_response = L_response;
@@ -1410,6 +1437,19 @@ function label = metric_label(metric_name)
         otherwise
             label = metric_name;
     end
+end
+
+function x = force_small_metric_values_to_zero(x, tol)
+    if isempty(tol)
+        return;
+    end
+
+    if ~isscalar(tol) || ~isnumeric(tol) || ~isfinite(tol) || tol < 0
+        error('metric_zero_tolerance must be a finite nonnegative scalar.');
+    end
+
+    finite_small_mask = isfinite(x) & abs(x) < tol;
+    x(finite_small_mask) = 0;
 end
 
 function name = sanitize_filename(name)
