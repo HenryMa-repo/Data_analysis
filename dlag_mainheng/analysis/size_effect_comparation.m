@@ -16,20 +16,15 @@
 %   - all groups are plotted in the same panel with different colors
 %
 % Expected input mat names from plot_size_effect.m:
-%   pick_contrast = 0:
-%       <data_content>_<model_mode>_size_effect_<field>.mat
-%   pick_contrast = 1:
-%       <data_content>_<model_mode>_size_effect_<field>_low_contrast.mat
-%   pick_contrast = 2:
-%       <data_content>_<model_mode>_size_effect_<field>_high_contrast.mat
+%   <data_content>_<model_mode>_size_effect_<field>.mat
 %
 % Example:
 %   raw_count_all_condition_model_size_effect_y.mat
-%   raw_count_all_condition_model_size_effect_yRecon_use_all_low_contrast.mat
-%   raw_count_condition_specific_models_size_effect_y_high_contrast.mat
+%   raw_count_all_condition_model_size_effect_yRecon_use_all.mat
+%   raw_count_condition_specific_models_size_effect_y.mat
 %
 % Output figure name:
-%   <data_content>_base_<all_base_fields>_compared_<all_compared_fields>_<metric>_<model_mode>[contrast_suffix]
+%   <data_content>_base_<all_base_fields>_compared_<all_compared_fields>_<metric>_<model_mode>
 %
 % Path convention:
 %   model_mode = 'all_condition_model'
@@ -48,7 +43,7 @@ clear;
 
 %% ----------------------- User parameters -----------------------
 
-data_content = 'raw_count';
+data_content = 'demean_count_within_trial';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial,
@@ -61,18 +56,6 @@ data_content = 'raw_count';
 model_mode = 'all_condition_model';
 
 runIdx = 1;
-
-% Contrast filter used by the upstream plot_size_effect.m results.
-%   0: no contrast filtering, old behavior
-%   1: low contrast within each stim_name
-%   2: high contrast within each stim_name
-%
-% Important:
-% - This script does not recompute size effect or refilter trials.
-% - It only loads the corresponding size_effect_result files saved by
-%   plot_size_effect.m.
-% - Therefore, run plot_size_effect.m first with the same pick_contrast.
-pick_contrast = 0;
 
 % Fields to analyze from seqEst.
 %
@@ -109,11 +92,11 @@ baseline_fields = {'yRecon_use_all'};
 
 % Compared fields used on y-axis.
 comparation_fields = { ...
-
-    'yRecon_use_across', ...
-    'yRecon_across_excl_within', ...
-    'yRecon_use_within', ...
-    'yRecon_within_excl_across'};
+    'yRecon_use_across',...
+    'yRecon_across_excl_within',...
+    'yRecon_use_within',...
+    'yRecon_within_excl_across',...
+    };
 
 % Metrics to compare.
 % Available from plot_size_effect.m:
@@ -171,7 +154,6 @@ comparation_fields = normalize_field_list_local(comparation_fields, 'comparation
 metrics = normalize_field_list_local(metrics, 'metrics');
 
 safe_data_content = sanitize_filename_local(data_content);
-[contrast_label, contrast_file_suffix] = resolve_contrast_selection_local(pick_contrast);
 
 io_dir = resolve_size_effect_io_dir_local(data_content, model_mode, runIdx, scriptDir);
 
@@ -181,7 +163,6 @@ end
 
 fprintf('Data content: %s\n', data_content);
 fprintf('Model mode: %s\n', model_mode);
-fprintf('Pick contrast: %d (%s)\n', pick_contrast, contrast_label);
 fprintf('Input/output folder:\n  %s\n', io_dir);
 
 fprintf('\nBaseline fields:\n');
@@ -203,13 +184,12 @@ for f = 1:numel(all_fields)
     key = field_to_key_local(field_name);
 
     result_file = build_size_effect_mat_file_local( ...
-        io_dir, safe_data_content, model_mode, field_name, contrast_file_suffix);
+        io_dir, safe_data_content, model_mode, field_name);
 
     fprintf('\nLoading size effect result for field %s:\n  %s\n', ...
         field_name, result_file);
 
-    result_map.(key) = load_size_effect_result_local( ...
-        result_file, field_name, pick_contrast, contrast_label, contrast_file_suffix);
+    result_map.(key) = load_size_effect_result_local(result_file, field_name);
 end
 
 %% ----------------------- Validate shared metadata across all fields -----------------------
@@ -231,18 +211,18 @@ for f = 2:numel(all_fields)
     validate_compatible_results_local( ...
         reference_result, this_result, ...
         reference_field, this_field, ...
-        data_content, model_mode, ...
-        pick_contrast, contrast_label, contrast_file_suffix);
+        data_content, model_mode);
 end
 
 group_row_ranges = build_group_row_ranges_local(groupd);
 
-%% ----------------------- Build output filename prefix -----------------------
+%% ----------------------- Build abbreviated output filename prefix -----------------------
 
-base_fields_tag = join_field_names_for_filename_local(baseline_fields);
-compared_fields_tag = join_field_names_for_filename_local(comparation_fields);
+base_fields_tag = join_short_field_names_for_filename_local(baseline_fields);
+compared_fields_tag = join_short_field_names_for_filename_local(comparation_fields);
+mode_file_tag = model_mode_to_file_tag_local(model_mode);
 
-output_prefix = sprintf('%s_base_%s_compared_%s', ...
+output_prefix = sprintf('%s_b-%s_c-%s', ...
     safe_data_content, base_fields_tag, compared_fields_tag);
 
 %% ----------------------- Plot one figure per metric -----------------------
@@ -401,8 +381,8 @@ for m = 1:numel(metrics)
         end
     end
 
-    sgtitle(tl, sprintf('%s | %s | %s | %s | neuron-wise size effect comparation', ...
-        data_content, model_mode, contrast_label, metric_name), ...
+    sgtitle(tl, sprintf('%s | %s | %s | neuron-wise size effect comparation', ...
+        data_content, model_mode, metric_name), ...
         'Interpreter', 'none');
 
     valid_legend_handles = legend_handles(isgraphics(legend_handles));
@@ -415,9 +395,10 @@ for m = 1:numel(metrics)
         lgd.Layout.Tile = 'east';
     end
 
-    output_base_name = sprintf('%s_%s_%s%s', ...
-        output_prefix, safe_metric, sanitize_filename_local(model_mode), ...
-        contrast_file_suffix);
+metric_file_tag = metric_to_file_tag_local(metric_name);
+
+output_base_name = sprintf('%s_%s_%s', ...
+    output_prefix, metric_file_tag, mode_file_tag);
 
     if save_fig
         save_current_figure_local(hfig, io_dir, output_base_name, ...
@@ -475,105 +456,6 @@ function fields = normalize_field_list_local(fields, var_name)
     end
 end
 
-function [contrast_label, contrast_file_suffix] = resolve_contrast_selection_local(pick_contrast)
-    if ~(isnumeric(pick_contrast) && isscalar(pick_contrast) && isfinite(pick_contrast))
-        error('pick_contrast must be a numeric scalar: 0, 1, or 2.');
-    end
-
-    pick_contrast = double(pick_contrast);
-
-    switch pick_contrast
-        case 0
-            contrast_label = 'all_contrast';
-            contrast_file_suffix = '';
-
-        case 1
-            contrast_label = 'low_contrast';
-            contrast_file_suffix = '_low_contrast';
-
-        case 2
-            contrast_label = 'high_contrast';
-            contrast_file_suffix = '_high_contrast';
-
-        otherwise
-            error('pick_contrast must be 0, 1, or 2. Got %g.', pick_contrast);
-    end
-end
-
-function validate_contrast_metadata_local( ...
-    result, result_id, field_name, expected_pick_contrast, ...
-    expected_contrast_label, expected_contrast_file_suffix, strict_for_filtered)
-% Validate contrast metadata written by the updated plot_size_effect.m.
-%
-% Compatibility rule:
-% - For pick_contrast = 0, old result files may not have contrast metadata.
-%   Missing metadata only causes a warning when strict_for_filtered is true.
-% - For pick_contrast = 1 or 2, metadata must exist and match. This avoids
-%   accidentally comparing old all-contrast results to low/high results.
-
-    if nargin < 7 || isempty(strict_for_filtered)
-        strict_for_filtered = true;
-    end
-
-    has_pick = isfield(result, 'pick_contrast');
-    has_label = isfield(result, 'contrast_label');
-    has_suffix = isfield(result, 'contrast_file_suffix');
-
-    if expected_pick_contrast == 0
-        if has_pick && ~isequal(double(result.pick_contrast), double(expected_pick_contrast))
-            warning(['pick_contrast in %s for field %s is %g, but this ', ...
-                'comparison script is set to %g.'], ...
-                result_id, field_name, double(result.pick_contrast), ...
-                double(expected_pick_contrast));
-        end
-
-        if has_label && ~strcmp(char(result.contrast_label), expected_contrast_label)
-            warning('contrast_label in %s for field %s differs from expected %s.', ...
-                result_id, field_name, expected_contrast_label);
-        end
-
-        if has_suffix && ~strcmp(char(result.contrast_file_suffix), expected_contrast_file_suffix)
-            warning('contrast_file_suffix in %s for field %s differs from expected %s.', ...
-                result_id, field_name, expected_contrast_file_suffix);
-        end
-
-        return;
-    end
-
-    missing_metadata = ~(has_pick && has_label && has_suffix);
-
-    if missing_metadata
-        msg = sprintf(['Contrast metadata missing in %s for field %s. ', ...
-            'For pick_contrast = %d, this usually means the file was not ', ...
-            'generated by the updated plot_size_effect.m.'], ...
-            result_id, field_name, expected_pick_contrast);
-
-        if strict_for_filtered
-            error('%s', msg);
-        else
-            warning('%s', msg);
-            return;
-        end
-    end
-
-    if ~isequal(double(result.pick_contrast), double(expected_pick_contrast))
-        error('pick_contrast mismatch in %s for field %s: got %g, expected %g.', ...
-            result_id, field_name, double(result.pick_contrast), ...
-            double(expected_pick_contrast));
-    end
-
-    if ~strcmp(char(result.contrast_label), expected_contrast_label)
-        error('contrast_label mismatch in %s for field %s: got %s, expected %s.', ...
-            result_id, field_name, char(result.contrast_label), expected_contrast_label);
-    end
-
-    if ~strcmp(char(result.contrast_file_suffix), expected_contrast_file_suffix)
-        error('contrast_file_suffix mismatch in %s for field %s: got %s, expected %s.', ...
-            result_id, field_name, char(result.contrast_file_suffix), ...
-            expected_contrast_file_suffix);
-    end
-end
-
 function io_dir = resolve_size_effect_io_dir_local(data_content, model_mode, runIdx, scriptDir)
     switch model_mode
         case 'all_condition_model'
@@ -590,24 +472,19 @@ function io_dir = resolve_size_effect_io_dir_local(data_content, model_mode, run
 end
 
 function result_file = build_size_effect_mat_file_local( ...
-    io_dir, safe_data_content, model_mode, field_name, contrast_file_suffix)
+    io_dir, safe_data_content, model_mode, field_name)
 
     safe_field = sanitize_filename_local(field_name);
 
-    result_file = fullfile(io_dir, sprintf('%s_%s_size_effect_%s%s.mat', ...
-        safe_data_content, model_mode, safe_field, contrast_file_suffix));
+    result_file = fullfile(io_dir, sprintf('%s_%s_size_effect_%s.mat', ...
+        safe_data_content, model_mode, safe_field));
 
     if ~isfile(result_file)
-        error(['Size effect result file not found:\n  %s\n', ...
-            'If pick_contrast is 1 or 2, run plot_size_effect.m first ', ...
-            'with the same pick_contrast to generate the corresponding ', ...
-            '_low_contrast or _high_contrast files.'], result_file);
+        error('Size effect result file not found:\n  %s', result_file);
     end
 end
 
-function result = load_size_effect_result_local( ...
-    result_file, expected_field, expected_pick_contrast, ...
-    expected_contrast_label, expected_contrast_file_suffix)
+function result = load_size_effect_result_local(result_file, expected_field)
     S = load(result_file);
 
     if ~isfield(S, 'size_effect_result')
@@ -638,16 +515,11 @@ function result = load_size_effect_result_local( ...
             'Continuing because file name matched expected field.'], ...
             result.analysis_field, expected_field);
     end
-
-    validate_contrast_metadata_local( ...
-        result, result_file, expected_field, expected_pick_contrast, ...
-        expected_contrast_label, expected_contrast_file_suffix, true);
 end
 
 function validate_compatible_results_local( ...
     reference_result, this_result, reference_field, this_field, ...
-    expected_data_content, expected_model_mode, ...
-    expected_pick_contrast, expected_contrast_label, expected_contrast_file_suffix)
+    expected_data_content, expected_model_mode)
 
     if ~strcmp(this_result.data_content, expected_data_content)
         error('Field %s data_content is %s, expected %s.', ...
@@ -685,10 +557,7 @@ function validate_compatible_results_local( ...
         'small_size', ...
         'large_size', ...
         'n_small_trials', ...
-        'n_large_trials', ...
-        'pick_contrast', ...
-        'contrast_label', ...
-        'contrast_file_suffix'};
+        'n_large_trials'};
 
     for i = 1:numel(optional_compare_fields)
         fn = optional_compare_fields{i};
@@ -710,16 +579,6 @@ function validate_compatible_results_local( ...
             end
         end
     end
-
-    validate_contrast_metadata_local( ...
-        reference_result, sprintf('reference result for %s', reference_field), ...
-        reference_field, expected_pick_contrast, expected_contrast_label, ...
-        expected_contrast_file_suffix, false);
-
-    validate_contrast_metadata_local( ...
-        this_result, sprintf('result for %s', this_field), ...
-        this_field, expected_pick_contrast, expected_contrast_label, ...
-        expected_contrast_file_suffix, false);
 end
 
 function group_names = resolve_group_names_local(group_names, result, nGroups)
@@ -946,4 +805,165 @@ function [nRows, nCols] = choose_panel_layout_local(nPanels, max_panel_cols)
 
     nRows = best_rows;
     nCols = best_cols;
+end
+
+function data_tag = data_content_to_file_tag_local(data_content)
+    switch data_content
+        case 'raw_count'
+            data_tag = 'rc';
+
+        case 'raw_fr'
+            data_tag = 'rfr';
+
+        case 'z_within_trial'
+            data_tag = 'zWT';
+
+        case 'z_within_condition'
+            data_tag = 'zWC';
+
+        case 'z_across_conditions'
+            data_tag = 'zAC';
+
+        case 'demean_count_within_trial'
+            data_tag = 'dcntWT';
+
+        case 'demean_fr_within_trial'
+            data_tag = 'dfrWT';
+
+        case 'demean_pooledsd_within_condition'
+            data_tag = 'dpsdWC';
+
+        otherwise
+            data_tag = sanitize_filename_local(data_content);
+            data_tag = compress_generic_name_local(data_tag);
+    end
+end
+
+function mode_tag = model_mode_to_file_tag_local(model_mode)
+    switch model_mode
+        case 'all_condition_model'
+            mode_tag = 'all';
+
+        case 'condition_specific_models'
+            mode_tag = 'csm';
+
+        otherwise
+            mode_tag = sanitize_filename_local(model_mode);
+            mode_tag = compress_generic_name_local(mode_tag);
+    end
+end
+
+function metric_tag = metric_to_file_tag_local(metric_name)
+    switch metric_name
+        case 'classic_SI'
+            metric_tag = 'SI';
+
+        case 'delta_SL'
+            metric_tag = 'dSL';
+
+        case 'S_norm_diff'
+            metric_tag = 'SnD';
+
+        otherwise
+            metric_tag = sanitize_filename_local(metric_name);
+            metric_tag = compress_generic_name_local(metric_tag);
+    end
+end
+
+function joined_name = join_short_field_names_for_filename_local(fields)
+    short_fields = cell(size(fields));
+
+    for i = 1:numel(fields)
+        short_fields{i} = analysis_field_to_file_tag_local(fields{i});
+    end
+
+    joined_name = strjoin(short_fields, '-');
+end
+
+function field_tag = analysis_field_to_file_tag_local(field_name)
+    switch field_name
+        case 'y'
+            field_tag = 'y';
+
+        case 'yRecon_use_all'
+            field_tag = 'yall';
+
+        case 'yRecon_use_across'
+            field_tag = 'yacr';
+
+        case 'yRecon_use_within'
+            field_tag = 'ywin';
+
+        case 'yRecon_across_excl_within'
+            field_tag = 'yacrXwin';
+
+        case 'yRecon_within_excl_across'
+            field_tag = 'ywinXacr';
+
+        case 'yRecon_use_all_with_R'
+            field_tag = 'yallR';
+
+        case 'yRecon_use_across_with_R'
+            field_tag = 'yacrR';
+
+        case 'yRecon_use_within_with_R'
+            field_tag = 'ywinR';
+
+        case 'yRecon_across_excl_within_with_R'
+            field_tag = 'yacrXwinR';
+
+        case 'yRecon_within_excl_across_with_R'
+            field_tag = 'ywinXacrR';
+
+        case 'yRecon_use_all_keep_resid'
+            field_tag = 'yallKR';
+
+        case 'yRecon_use_across_keep_resid'
+            field_tag = 'yacrKR';
+
+        case 'yRecon_use_within_keep_resid'
+            field_tag = 'ywinKR';
+
+        case 'yRecon_across_excl_within_keep_resid'
+            field_tag = 'yacrXwinKR';
+
+        case 'yRecon_within_excl_across_keep_resid'
+            field_tag = 'ywinXacrKR';
+
+        otherwise
+            field_tag = sanitize_filename_local(field_name);
+            field_tag = strrep(field_tag, 'yRecon_', 'y');
+            field_tag = strrep(field_tag, 'use_', '');
+            field_tag = strrep(field_tag, 'across', 'acr');
+            field_tag = strrep(field_tag, 'within', 'win');
+            field_tag = strrep(field_tag, 'excl', 'X');
+            field_tag = strrep(field_tag, 'condition', 'cond');
+            field_tag = strrep(field_tag, 'resid', 'res');
+            field_tag = compress_generic_name_local(field_tag);
+    end
+end
+
+function short_name = compress_generic_name_local(name)
+    short_name = name;
+
+    replacements = { ...
+        'demean', 'dm'; ...
+        'count', 'cnt'; ...
+        'within', 'win'; ...
+        'trial', 'tr'; ...
+        'condition', 'cond'; ...
+        'conditions', 'conds'; ...
+        'across', 'acr'; ...
+        'pooled', 'pool'; ...
+        'reconstruction', 'recon'; ...
+        'specific', 'spec'; ...
+        'model', 'mdl'; ...
+        'models', 'mdls'};
+
+    for i = 1:size(replacements, 1)
+        short_name = strrep(short_name, replacements{i, 1}, replacements{i, 2});
+    end
+
+    short_name = regexprep(short_name, '_+', '_');
+    short_name = regexprep(short_name, '^_|_$', '');
 end
