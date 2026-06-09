@@ -93,11 +93,15 @@ runIdx = 1;
 %   y
 %
 % Base noiseless reconstruction fields after data_reconstruction.m:
-%   yRecon_use_across
-%   yRecon_use_within
-%   yRecon_use_all
-%   yRecon_across_excl_within
-%   yRecon_within_excl_across
+%   seqEst(n).d
+%   seqEst(n).yRecon_use_across
+%   seqEst(n).yRecon_use_within
+%   seqEst(n).yRecon_use_all
+%   seqEst(n).yRecon_use_across_no_d
+%   seqEst(n).yRecon_use_within_no_d
+%   seqEst(n).yRecon_use_all_no_d
+%   seqEst(n).yRecon_across_excl_within
+%   seqEst(n).yRecon_within_excl_across
 %
 % Reconstruction fields with R noise, if generated:
 %   yRecon_use_across_with_R
