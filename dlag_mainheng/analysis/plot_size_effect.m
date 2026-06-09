@@ -6,7 +6,8 @@
 % 1. Load seqEst from DLAG bestmodel.
 % 2. Use selected seqEst field:
 %       response_data = seqEst.(analysis_field)
-% 3. Pool trials by condition size:
+% 3. Optionally filter conditions/trials by relative contrast level, then
+%    pool trials by condition size:
 %       small size vs large size
 % 4. For each trial, compute total response across all time bins:
 %       trial_response = sum(seqEst(t).(analysis_field), 2)
@@ -17,6 +18,16 @@
 %       S_norm_diff = (S - L) ./ abs(S)
 % 7. Plot small vs large response separately for each group.
 % 8. Save result mat and figures.
+%
+% Contrast filter:
+% - pick_contrast = 0
+%       Use all contrasts, exactly matching the original behavior.
+% - pick_contrast = 1
+%       Use only low-contrast conditions. Low is defined within each
+%       stim_name by sorting that stim_name's contrast values.
+% - pick_contrast = 2
+%       Use only high-contrast conditions. High is defined within each
+%       stim_name by sorting that stim_name's contrast values.
 %
 % Model modes:
 % - data_condition = []
@@ -53,7 +64,7 @@ clear;
 
 %% ----------------------- User parameters -----------------------
 
-data_content = 'demean_count_within_trial';
+data_content = 'raw_count';
 % options:
 % raw_count, raw_fr, z_within_trial, z_within_condition,
 % z_across_conditions, demean_count_within_trial,
@@ -61,7 +72,14 @@ data_content = 'demean_count_within_trial';
 
 % [] means pooled all-condition model.
 % Non-empty means condition-specific models, e.g. 1:16.
-data_condition = [1:16];
+data_condition = [];
+
+% Contrast filter for size-effect pooling.
+%   0 = use all contrasts, same as old behavior.
+%   1 = use low contrast only.
+%   2 = use high contrast only.
+% Low/high are defined within each stim_name, not by global min/max contrast.
+pick_contrast = 1;
 
 runIdx = 1;
 
@@ -146,6 +164,7 @@ end
 
 analysis_fields = normalize_analysis_fields(analysis_fields);
 nAnalysisFields = numel(analysis_fields);
+pick_contrast = validate_pick_contrast_local(pick_contrast);
 
 if isempty(data_condition)
     model_mode = 'all_condition_model';
@@ -206,6 +225,18 @@ if ~isfield(conditions_full, 'size')
     error('Condition field "size" not found in conditions_full.');
 end
 
+%% ----------------------- Determine contrast filter -----------------------
+
+contrast_filter = build_contrast_filter_info_local(conditions_full, pick_contrast);
+
+fprintf('\nContrast filter mode: %s\n', contrast_filter.label);
+if pick_contrast ~= 0
+    fprintf('Selected contrast condition indices:\n');
+    disp(contrast_filter.selected_condition_indices);
+    fprintf('Contrast values by stim_name:\n');
+    disp(contrast_filter.contrastValuesByStim);
+end
+
 %% ----------------------- Determine small and large size -----------------------
 
 size_values = [conditions_full.size];
@@ -222,8 +253,8 @@ end
 small_size = min(unique_sizes);
 large_size = max(unique_sizes);
 
-small_condition_indices = find(size_values == small_size);
-large_condition_indices = find(size_values == large_size);
+small_condition_indices = find(size_values == small_size & contrast_filter.condition_mask);
+large_condition_indices = find(size_values == large_size & contrast_filter.condition_mask);
 
 fprintf('Using small_size = %g\n', small_size);
 fprintf('Using large_size = %g\n', large_size);
@@ -234,12 +265,34 @@ disp(small_condition_indices);
 fprintf('Large-size condition indices:\n');
 disp(large_condition_indices);
 
+if isempty(small_condition_indices)
+    error('No small-size conditions remain after applying pick_contrast = %d.', pick_contrast);
+end
+
+if isempty(large_condition_indices)
+    error('No large-size conditions remain after applying pick_contrast = %d.', pick_contrast);
+end
+
+requested_condition_list = condition_list;
+
 if use_condition_specific_models
     if any(condition_list < 1) || any(condition_list > numel(conditions_full))
         error('data_condition contains indices outside 1:%d.', numel(conditions_full));
     end
 
-    fprintf('\nUsing condition-specific models for conditions:\n');
+    if pick_contrast ~= 0
+        condition_list = condition_list(contrast_filter.condition_mask(condition_list));
+
+        if isempty(condition_list)
+            error(['No requested condition-specific models remain after applying ', ...
+                'pick_contrast = %d. Requested conditions were: %s.'], ...
+                pick_contrast, mat2str(requested_condition_list));
+        end
+    end
+
+    fprintf('\nRequested condition-specific models before contrast filtering:\n');
+    disp(requested_condition_list);
+    fprintf('Using condition-specific models after contrast filtering:\n');
     disp(condition_list);
 else
     fprintf('\nUsing pooled all-condition model.\n');
@@ -285,9 +338,10 @@ if ~use_condition_specific_models
     end
 
     trial_size = size_values(condition_index_seq);
+    trial_contrast_mask = contrast_filter.condition_mask(condition_index_seq);
 
-    small_trial_mask = trial_size == small_size;
-    large_trial_mask = trial_size == large_size;
+    small_trial_mask = trial_size == small_size & trial_contrast_mask;
+    large_trial_mask = trial_size == large_size & trial_contrast_mask;
 
     small_trial_indices_in_seqEst = find(small_trial_mask);
     large_trial_indices_in_seqEst = find(large_trial_mask);
@@ -335,6 +389,8 @@ if ~use_condition_specific_models
         field_cache(f).model_source(1).runDir = runDir;
         field_cache(f).model_source(1).bestmodel_file = bestmodel_file;
         field_cache(f).model_source(1).nTrials = numel(seqEst);
+        field_cache(f).model_source(1).pick_contrast = pick_contrast;
+        field_cache(f).model_source(1).contrast_label = contrast_filter.label;
     end
 
     clear S_best seqEst;
@@ -433,6 +489,8 @@ else
             field_cache(f).model_source(cc).model_mode = model_mode; %#ok<SAGROW>
             field_cache(f).model_source(cc).condition = this_condition;
             field_cache(f).model_source(cc).condition_size = this_condition_size;
+            field_cache(f).model_source(cc).condition_contrast_code = contrast_filter.condition_contrast_code(this_condition);
+            field_cache(f).model_source(cc).condition_contrast_label = contrast_filter.condition_contrast_label{this_condition};
             field_cache(f).model_source(cc).baseDir = baseDir;
             field_cache(f).model_source(cc).runDir = runDir;
             field_cache(f).model_source(cc).bestmodel_file = bestmodel_file;
@@ -456,14 +514,14 @@ for analysisFieldIdx = 1:nAnalysisFields
     analysis_field = field_cache(analysisFieldIdx).analysis_field;
     safe_field = sanitize_filename(analysis_field);
 
-    size_effect_base_name = sprintf('%s_%s_size_effect_%s', ...
-        safe_data_content, model_mode, safe_field);
+    size_effect_base_name = sprintf('%s_%s_size_effect_%s%s', ...
+        safe_data_content, model_mode, safe_field, contrast_filter.file_suffix);
 
-    svsl_fullrange_base_name = sprintf('%s_%s_svsl_%s_fullrange', ...
-        safe_data_content, model_mode, safe_field);
+    svsl_fullrange_base_name = sprintf('%s_%s_svsl_%s_fullrange%s', ...
+        safe_data_content, model_mode, safe_field, contrast_filter.file_suffix);
 
-    svsl_brokenaxis_base_name = sprintf('%s_%s_svsl_%s_brokenaxis', ...
-        safe_data_content, model_mode, safe_field);
+    svsl_brokenaxis_base_name = sprintf('%s_%s_svsl_%s_brokenaxis%s', ...
+        safe_data_content, model_mode, safe_field, contrast_filter.file_suffix);
 
     fprintf('\n============================================================\n');
     fprintf('Processing accumulated analysis field %d/%d: seqEst.%s\n', ...
@@ -559,7 +617,20 @@ for analysisFieldIdx = 1:nAnalysisFields
     size_effect_result.data_content = data_content;
     size_effect_result.model_mode = model_mode;
     size_effect_result.data_condition = data_condition;
+    size_effect_result.requested_condition_list = requested_condition_list;
     size_effect_result.condition_list = condition_list;
+
+    size_effect_result.pick_contrast = pick_contrast;
+    size_effect_result.contrast_label = contrast_filter.label;
+    size_effect_result.contrast_file_suffix = contrast_filter.file_suffix;
+    size_effect_result.contrast_condition_mask = contrast_filter.condition_mask;
+    size_effect_result.selected_contrast_condition_indices = contrast_filter.selected_condition_indices;
+    size_effect_result.condition_contrast_code = contrast_filter.condition_contrast_code;
+    size_effect_result.condition_contrast_label = contrast_filter.condition_contrast_label;
+    size_effect_result.condition_contrast_value = contrast_filter.condition_contrast_value;
+    size_effect_result.condition_stim_name = contrast_filter.condition_stim_name;
+    size_effect_result.contrastValuesByStim = contrast_filter.contrastValuesByStim;
+    size_effect_result.stimLabelsForContrast = contrast_filter.stimLabels;
     size_effect_result.runIdx = runIdx;
     size_effect_result.stim_tag = stim_tag;
     size_effect_result.dat_file = dat_file;
@@ -752,6 +823,161 @@ function analysis_fields = normalize_analysis_fields(analysis_fields)
 
     if numel(unique(analysis_fields, 'stable')) ~= numel(analysis_fields)
         error('analysis_fields contains duplicate fields.');
+    end
+
+end
+
+function pick_contrast = validate_pick_contrast_local(pick_contrast)
+    if isstring(pick_contrast)
+        pick_contrast = str2double(pick_contrast);
+    end
+
+    if ~isnumeric(pick_contrast) || ~isscalar(pick_contrast) || ~isfinite(pick_contrast)
+        error('pick_contrast must be 0, 1, or 2.');
+    end
+
+    if mod(pick_contrast, 1) ~= 0 || ~ismember(pick_contrast, [0 1 2])
+        error('pick_contrast must be 0, 1, or 2.');
+    end
+
+    pick_contrast = double(pick_contrast);
+end
+
+function contrast_filter = build_contrast_filter_info_local(conditions_full, pick_contrast)
+% Build per-condition relative contrast labels.
+%
+% Important:
+% - Low/high contrast is defined within each stim_name.
+% - This avoids using the global min/max contrast, which is wrong when
+%   grating and plaid have different numeric contrast levels.
+% - pick_contrast = 0 keeps all conditions and does not require contrast
+%   fields, preserving the old behavior.
+
+    nCond = numel(conditions_full);
+
+    contrast_filter = struct();
+    contrast_filter.pick_contrast = pick_contrast;
+    contrast_filter.condition_mask = true(1, nCond);
+    contrast_filter.selected_condition_indices = 1:nCond;
+    contrast_filter.condition_contrast_code = nan(1, nCond);
+    contrast_filter.condition_contrast_label = repmat({'all'}, 1, nCond);
+    contrast_filter.condition_contrast_value = nan(1, nCond);
+    contrast_filter.condition_stim_name = repmat({''}, 1, nCond);
+    contrast_filter.contrastValuesByStim = struct();
+    contrast_filter.stimLabels = {};
+
+    if pick_contrast == 0
+        contrast_filter.label = 'all_contrasts';
+        contrast_filter.file_suffix = '';
+        return;
+    elseif pick_contrast == 1
+        contrast_filter.label = 'low_contrast';
+        contrast_filter.file_suffix = '_low_contrast';
+    elseif pick_contrast == 2
+        contrast_filter.label = 'high_contrast';
+        contrast_filter.file_suffix = '_high_contrast';
+    else
+        error('pick_contrast must be 0, 1, or 2.');
+    end
+
+    required_fields = {'stim_name', 'contrast'};
+    for f = 1:numel(required_fields)
+        fn = required_fields{f};
+        if ~isfield(conditions_full, fn)
+            error(['pick_contrast = %d requires conditions_full.%s, ', ...
+                'but that field is missing.'], pick_contrast, fn);
+        end
+    end
+
+    stimNameAll = strings(nCond, 1);
+    contrastAll = nan(nCond, 1);
+
+    for k = 1:nCond
+        stimNameAll(k) = lower(string(conditions_full(k).stim_name));
+        contrastAll(k) = conditions_full(k).contrast;
+
+        if ~isfinite(contrastAll(k))
+            error('conditions_full(%d).contrast is not finite.', k);
+        end
+    end
+
+    allStim = unique(stimNameAll, 'stable');
+    allStim = lower(allStim);
+
+    % Keep the grating/plaid order when both are present, following the
+    % condition-summary convention used in Latents_compare.m.
+    if all(ismember(["grating", "plaid"], allStim))
+        stimLabels = ["grating", "plaid"];
+    else
+        stimLabels = allStim(:)';
+    end
+
+    contrastValuesByStim = struct();
+    condition_contrast_code = nan(1, nCond);
+    condition_contrast_label = cell(1, nCond);
+    condition_contrast_value = nan(1, nCond);
+    condition_stim_name = cell(1, nCond);
+
+    for s = 1:numel(stimLabels)
+        stim = stimLabels(s);
+        idx = (stimNameAll == stim);
+
+        if ~any(idx)
+            continue;
+        end
+
+        cvals = unique(contrastAll(idx));
+        cvals = sort(cvals(:)');
+
+        if numel(cvals) ~= 2
+            error(['Stim %s does not have exactly 2 contrast levels. ', ...
+                'Found %d levels: %s.'], char(stim), numel(cvals), mat2str(cvals));
+        end
+
+        contrastValuesByStim.(char(stim)) = cvals;
+
+        condIdx = find(idx);
+        for jj = 1:numel(condIdx)
+            condID = condIdx(jj);
+            currContrast = contrastAll(condID);
+            contrastCode = find(abs(cvals - currContrast) < 1e-10, 1);
+
+            if isempty(contrastCode)
+                error('Could not map condition %d contrast value %g within stim %s.', ...
+                    condID, currContrast, char(stim));
+            end
+
+            condition_contrast_code(condID) = contrastCode;
+            condition_contrast_label{condID} = ternary_label_local(contrastCode, 'low', 'high');
+            condition_contrast_value(condID) = currContrast;
+            condition_stim_name{condID} = char(stim);
+        end
+    end
+
+    if any(isnan(condition_contrast_code))
+        missingID = find(isnan(condition_contrast_code), 1);
+        error('Could not assign contrast code for condition %d.', missingID);
+    end
+
+    condition_mask = condition_contrast_code == pick_contrast;
+
+    contrast_filter.condition_mask = condition_mask;
+    contrast_filter.selected_condition_indices = find(condition_mask);
+    contrast_filter.condition_contrast_code = condition_contrast_code;
+    contrast_filter.condition_contrast_label = condition_contrast_label;
+    contrast_filter.condition_contrast_value = condition_contrast_value;
+    contrast_filter.condition_stim_name = condition_stim_name;
+    contrast_filter.contrastValuesByStim = contrastValuesByStim;
+    contrast_filter.stimLabels = cellstr(stimLabels);
+end
+
+function label = ternary_label_local(code, label1, label2)
+    if code == 1
+        label = label1;
+    elseif code == 2
+        label = label2;
+    else
+        error('ternary_label_local expects code 1 or 2.');
     end
 end
 

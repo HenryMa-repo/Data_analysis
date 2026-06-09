@@ -16,15 +16,20 @@
 %   - all groups are plotted in the same panel with different colors
 %
 % Expected input mat names from plot_size_effect.m:
-%   <data_content>_<model_mode>_size_effect_<field>.mat
+%   pick_contrast = 0:
+%       <data_content>_<model_mode>_size_effect_<field>.mat
+%   pick_contrast = 1:
+%       <data_content>_<model_mode>_size_effect_<field>_low_contrast.mat
+%   pick_contrast = 2:
+%       <data_content>_<model_mode>_size_effect_<field>_high_contrast.mat
 %
 % Example:
 %   raw_count_all_condition_model_size_effect_y.mat
-%   raw_count_all_condition_model_size_effect_yRecon_use_all.mat
-%   raw_count_condition_specific_models_size_effect_y.mat
+%   raw_count_all_condition_model_size_effect_yRecon_use_all_low_contrast.mat
+%   raw_count_condition_specific_models_size_effect_y_high_contrast.mat
 %
 % Output figure name:
-%   <data_content>_base_<all_base_fields>_compared_<all_compared_fields>_<metric>_<model_mode>
+%   <data_content>_base_<all_base_fields>_compared_<all_compared_fields>_<metric>_<model_mode>[contrast_suffix]
 %
 % Path convention:
 %   model_mode = 'all_condition_model'
@@ -56,6 +61,18 @@ data_content = 'raw_count';
 model_mode = 'all_condition_model';
 
 runIdx = 1;
+
+% Contrast filter used by the upstream plot_size_effect.m results.
+%   0: no contrast filtering, old behavior
+%   1: low contrast within each stim_name
+%   2: high contrast within each stim_name
+%
+% Important:
+% - This script does not recompute size effect or refilter trials.
+% - It only loads the corresponding size_effect_result files saved by
+%   plot_size_effect.m.
+% - Therefore, run plot_size_effect.m first with the same pick_contrast.
+pick_contrast = 0;
 
 % Fields to analyze from seqEst.
 %
@@ -154,6 +171,7 @@ comparation_fields = normalize_field_list_local(comparation_fields, 'comparation
 metrics = normalize_field_list_local(metrics, 'metrics');
 
 safe_data_content = sanitize_filename_local(data_content);
+[contrast_label, contrast_file_suffix] = resolve_contrast_selection_local(pick_contrast);
 
 io_dir = resolve_size_effect_io_dir_local(data_content, model_mode, runIdx, scriptDir);
 
@@ -163,6 +181,7 @@ end
 
 fprintf('Data content: %s\n', data_content);
 fprintf('Model mode: %s\n', model_mode);
+fprintf('Pick contrast: %d (%s)\n', pick_contrast, contrast_label);
 fprintf('Input/output folder:\n  %s\n', io_dir);
 
 fprintf('\nBaseline fields:\n');
@@ -184,12 +203,13 @@ for f = 1:numel(all_fields)
     key = field_to_key_local(field_name);
 
     result_file = build_size_effect_mat_file_local( ...
-        io_dir, safe_data_content, model_mode, field_name);
+        io_dir, safe_data_content, model_mode, field_name, contrast_file_suffix);
 
     fprintf('\nLoading size effect result for field %s:\n  %s\n', ...
         field_name, result_file);
 
-    result_map.(key) = load_size_effect_result_local(result_file, field_name);
+    result_map.(key) = load_size_effect_result_local( ...
+        result_file, field_name, pick_contrast, contrast_label, contrast_file_suffix);
 end
 
 %% ----------------------- Validate shared metadata across all fields -----------------------
@@ -211,7 +231,8 @@ for f = 2:numel(all_fields)
     validate_compatible_results_local( ...
         reference_result, this_result, ...
         reference_field, this_field, ...
-        data_content, model_mode);
+        data_content, model_mode, ...
+        pick_contrast, contrast_label, contrast_file_suffix);
 end
 
 group_row_ranges = build_group_row_ranges_local(groupd);
@@ -380,8 +401,8 @@ for m = 1:numel(metrics)
         end
     end
 
-    sgtitle(tl, sprintf('%s | %s | %s | neuron-wise size effect comparation', ...
-        data_content, model_mode, metric_name), ...
+    sgtitle(tl, sprintf('%s | %s | %s | %s | neuron-wise size effect comparation', ...
+        data_content, model_mode, contrast_label, metric_name), ...
         'Interpreter', 'none');
 
     valid_legend_handles = legend_handles(isgraphics(legend_handles));
@@ -394,8 +415,9 @@ for m = 1:numel(metrics)
         lgd.Layout.Tile = 'east';
     end
 
-    output_base_name = sprintf('%s_%s_%s', ...
-        output_prefix, safe_metric, sanitize_filename_local(model_mode));
+    output_base_name = sprintf('%s_%s_%s%s', ...
+        output_prefix, safe_metric, sanitize_filename_local(model_mode), ...
+        contrast_file_suffix);
 
     if save_fig
         save_current_figure_local(hfig, io_dir, output_base_name, ...
@@ -453,6 +475,105 @@ function fields = normalize_field_list_local(fields, var_name)
     end
 end
 
+function [contrast_label, contrast_file_suffix] = resolve_contrast_selection_local(pick_contrast)
+    if ~(isnumeric(pick_contrast) && isscalar(pick_contrast) && isfinite(pick_contrast))
+        error('pick_contrast must be a numeric scalar: 0, 1, or 2.');
+    end
+
+    pick_contrast = double(pick_contrast);
+
+    switch pick_contrast
+        case 0
+            contrast_label = 'all_contrast';
+            contrast_file_suffix = '';
+
+        case 1
+            contrast_label = 'low_contrast';
+            contrast_file_suffix = '_low_contrast';
+
+        case 2
+            contrast_label = 'high_contrast';
+            contrast_file_suffix = '_high_contrast';
+
+        otherwise
+            error('pick_contrast must be 0, 1, or 2. Got %g.', pick_contrast);
+    end
+end
+
+function validate_contrast_metadata_local( ...
+    result, result_id, field_name, expected_pick_contrast, ...
+    expected_contrast_label, expected_contrast_file_suffix, strict_for_filtered)
+% Validate contrast metadata written by the updated plot_size_effect.m.
+%
+% Compatibility rule:
+% - For pick_contrast = 0, old result files may not have contrast metadata.
+%   Missing metadata only causes a warning when strict_for_filtered is true.
+% - For pick_contrast = 1 or 2, metadata must exist and match. This avoids
+%   accidentally comparing old all-contrast results to low/high results.
+
+    if nargin < 7 || isempty(strict_for_filtered)
+        strict_for_filtered = true;
+    end
+
+    has_pick = isfield(result, 'pick_contrast');
+    has_label = isfield(result, 'contrast_label');
+    has_suffix = isfield(result, 'contrast_file_suffix');
+
+    if expected_pick_contrast == 0
+        if has_pick && ~isequal(double(result.pick_contrast), double(expected_pick_contrast))
+            warning(['pick_contrast in %s for field %s is %g, but this ', ...
+                'comparison script is set to %g.'], ...
+                result_id, field_name, double(result.pick_contrast), ...
+                double(expected_pick_contrast));
+        end
+
+        if has_label && ~strcmp(char(result.contrast_label), expected_contrast_label)
+            warning('contrast_label in %s for field %s differs from expected %s.', ...
+                result_id, field_name, expected_contrast_label);
+        end
+
+        if has_suffix && ~strcmp(char(result.contrast_file_suffix), expected_contrast_file_suffix)
+            warning('contrast_file_suffix in %s for field %s differs from expected %s.', ...
+                result_id, field_name, expected_contrast_file_suffix);
+        end
+
+        return;
+    end
+
+    missing_metadata = ~(has_pick && has_label && has_suffix);
+
+    if missing_metadata
+        msg = sprintf(['Contrast metadata missing in %s for field %s. ', ...
+            'For pick_contrast = %d, this usually means the file was not ', ...
+            'generated by the updated plot_size_effect.m.'], ...
+            result_id, field_name, expected_pick_contrast);
+
+        if strict_for_filtered
+            error('%s', msg);
+        else
+            warning('%s', msg);
+            return;
+        end
+    end
+
+    if ~isequal(double(result.pick_contrast), double(expected_pick_contrast))
+        error('pick_contrast mismatch in %s for field %s: got %g, expected %g.', ...
+            result_id, field_name, double(result.pick_contrast), ...
+            double(expected_pick_contrast));
+    end
+
+    if ~strcmp(char(result.contrast_label), expected_contrast_label)
+        error('contrast_label mismatch in %s for field %s: got %s, expected %s.', ...
+            result_id, field_name, char(result.contrast_label), expected_contrast_label);
+    end
+
+    if ~strcmp(char(result.contrast_file_suffix), expected_contrast_file_suffix)
+        error('contrast_file_suffix mismatch in %s for field %s: got %s, expected %s.', ...
+            result_id, field_name, char(result.contrast_file_suffix), ...
+            expected_contrast_file_suffix);
+    end
+end
+
 function io_dir = resolve_size_effect_io_dir_local(data_content, model_mode, runIdx, scriptDir)
     switch model_mode
         case 'all_condition_model'
@@ -469,19 +590,24 @@ function io_dir = resolve_size_effect_io_dir_local(data_content, model_mode, run
 end
 
 function result_file = build_size_effect_mat_file_local( ...
-    io_dir, safe_data_content, model_mode, field_name)
+    io_dir, safe_data_content, model_mode, field_name, contrast_file_suffix)
 
     safe_field = sanitize_filename_local(field_name);
 
-    result_file = fullfile(io_dir, sprintf('%s_%s_size_effect_%s.mat', ...
-        safe_data_content, model_mode, safe_field));
+    result_file = fullfile(io_dir, sprintf('%s_%s_size_effect_%s%s.mat', ...
+        safe_data_content, model_mode, safe_field, contrast_file_suffix));
 
     if ~isfile(result_file)
-        error('Size effect result file not found:\n  %s', result_file);
+        error(['Size effect result file not found:\n  %s\n', ...
+            'If pick_contrast is 1 or 2, run plot_size_effect.m first ', ...
+            'with the same pick_contrast to generate the corresponding ', ...
+            '_low_contrast or _high_contrast files.'], result_file);
     end
 end
 
-function result = load_size_effect_result_local(result_file, expected_field)
+function result = load_size_effect_result_local( ...
+    result_file, expected_field, expected_pick_contrast, ...
+    expected_contrast_label, expected_contrast_file_suffix)
     S = load(result_file);
 
     if ~isfield(S, 'size_effect_result')
@@ -512,11 +638,16 @@ function result = load_size_effect_result_local(result_file, expected_field)
             'Continuing because file name matched expected field.'], ...
             result.analysis_field, expected_field);
     end
+
+    validate_contrast_metadata_local( ...
+        result, result_file, expected_field, expected_pick_contrast, ...
+        expected_contrast_label, expected_contrast_file_suffix, true);
 end
 
 function validate_compatible_results_local( ...
     reference_result, this_result, reference_field, this_field, ...
-    expected_data_content, expected_model_mode)
+    expected_data_content, expected_model_mode, ...
+    expected_pick_contrast, expected_contrast_label, expected_contrast_file_suffix)
 
     if ~strcmp(this_result.data_content, expected_data_content)
         error('Field %s data_content is %s, expected %s.', ...
@@ -554,7 +685,10 @@ function validate_compatible_results_local( ...
         'small_size', ...
         'large_size', ...
         'n_small_trials', ...
-        'n_large_trials'};
+        'n_large_trials', ...
+        'pick_contrast', ...
+        'contrast_label', ...
+        'contrast_file_suffix'};
 
     for i = 1:numel(optional_compare_fields)
         fn = optional_compare_fields{i};
@@ -576,6 +710,16 @@ function validate_compatible_results_local( ...
             end
         end
     end
+
+    validate_contrast_metadata_local( ...
+        reference_result, sprintf('reference result for %s', reference_field), ...
+        reference_field, expected_pick_contrast, expected_contrast_label, ...
+        expected_contrast_file_suffix, false);
+
+    validate_contrast_metadata_local( ...
+        this_result, sprintf('result for %s', this_field), ...
+        this_field, expected_pick_contrast, expected_contrast_label, ...
+        expected_contrast_file_suffix, false);
 end
 
 function group_names = resolve_group_names_local(group_names, result, nGroups)
