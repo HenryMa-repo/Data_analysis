@@ -1142,97 +1142,110 @@ end
 end
 
 function conditionMap = buildConditionSummaryMapLocal(condition_full, condition_list)
+% Build short labels such as G-S-L, G-S-H, G-L-L, etc.
+%
+% This version uses canonical effective stimulus direction values for
+% old model_data/condition_full files generated before upstream angle
+% normalization. Equivalent angles such as 360/0 and -10/350 are treated
+% as the same direction during downstream summary labeling.
 
 if isempty(condition_full)
     error('condition_full is empty.');
 end
 
 nAll = numel(condition_full);
+
 stimNameAll = strings(nAll, 1);
 sizeAll = nan(nAll, 1);
 contrastAll = nan(nAll, 1);
 effDirAll = nan(nAll, 1);
 
 for k = 1:nAll
+
     if ~isfield(condition_full(k), 'stim_name')
         error('condition_full(%d) missing field stim_name.', k);
     end
+
     if ~isfield(condition_full(k), 'size')
         error('condition_full(%d) missing field size.', k);
     end
+
     if ~isfield(condition_full(k), 'contrast')
         error('condition_full(%d) missing field contrast.', k);
     end
 
     currStim = lower(string(condition_full(k).stim_name));
+
     stimNameAll(k) = currStim;
     sizeAll(k) = condition_full(k).size;
     contrastAll(k) = condition_full(k).contrast;
 
-    if currStim == "plaid"
-        if ~isfield(condition_full(k), 'plaid_dir')
-            error('condition_full(%d) missing field plaid_dir.', k);
-        end
-        effDirAll(k) = condition_full(k).plaid_dir;
-    elseif currStim == "grating"
-        if ~isfield(condition_full(k), 'grating_dir')
-            error('condition_full(%d) missing field grating_dir.', k);
-        end
-        effDirAll(k) = condition_full(k).grating_dir;
-    else
-        error('Unsupported stim_name in condition_full(%d): %s', k, char(currStim));
-    end
+    effDirAll(k) = getConditionEffectiveDirCanonicalLocal(condition_full(k), k);
 end
 
 allStim = unique(stimNameAll, 'stable');
 allStim = lower(allStim);
+
 if all(ismember(["grating", "plaid"], allStim))
     stimLabels = ["grating", "plaid"];
 else
     if numel(allStim) ~= 2
         error('Expected exactly 2 stim levels in condition_full.');
     end
+
     stimLabels = allStim(:)';
 end
 
 sizeVals = unique(sizeAll);
 sizeVals = sort(sizeVals(:)');
+
 if numel(sizeVals) ~= 2
     error('Expected exactly 2 size levels in condition_full.');
 end
 
 contrastValuesByStim = struct();
+
 for s = 1:2
     idx = (stimNameAll == stimLabels(s));
     cvals = unique(contrastAll(idx));
     cvals = sort(cvals(:)');
+
     if numel(cvals) ~= 2
-        error('Stim %s does not have exactly 2 contrast levels.', char(stimLabels(s)));
+        error('Stim %s does not have exactly 2 contrast levels.', ...
+            char(stimLabels(s)));
     end
+
     contrastValuesByStim.(char(stimLabels(s))) = cvals;
 end
 
-dirVals = unique(effDirAll);
+dirVals = unique(effDirAll(isfinite(effDirAll)));
 dirVals = sort(dirVals(:)');
+
 if numel(dirVals) ~= 2
-    error('Expected exactly 2 effective direction values in condition_full.');
+    error('Expected exactly 2 effective canonical direction values in condition_full, found %d: %s.', ...
+        numel(dirVals), mat2str(dirVals));
 end
 
 stimDirLabels = {'stim_dir1', 'stim_dir2'};
 
-condLabels = { ...
-    'grating-small-low', 'grating-small-high', ...
-    'grating-large-low', 'grating-large-high', ...
-    'plaid-small-low', 'plaid-small-high', ...
-    'plaid-large-low', 'plaid-large-high'};
+condLabels = {
+    'grating-small-low',  'grating-small-high', ...
+    'grating-large-low',  'grating-large-high', ...
+    'plaid-small-low',    'plaid-small-high', ...
+    'plaid-large-low',    'plaid-large-high'
+};
 
-condShortLabels = { ...
+condShortLabels = {
     'G-S-L', 'G-S-H', 'G-L-L', 'G-L-H', ...
-    'P-S-L', 'P-S-H', 'P-L-L', 'P-L-H'};
+    'P-S-L', 'P-S-H', 'P-L-L', 'P-L-H'
+};
 
 entries = struct([]);
+
 for ii = 1:numel(condition_list)
+
     condID = condition_list(ii);
+
     if condID < 1 || condID > nAll
         error('Condition ID %d is outside condition_full range.', condID);
     end
@@ -1240,17 +1253,19 @@ for ii = 1:numel(condition_list)
     currStim = lower(string(condition_full(condID).stim_name));
     currSize = condition_full(condID).size;
     currContrast = condition_full(condID).contrast;
-    if currStim == "plaid"
-        currDir = condition_full(condID).plaid_dir;
-    else
-        currDir = condition_full(condID).grating_dir;
-    end
+    currDir = getConditionEffectiveDirCanonicalLocal(condition_full(condID), condID);
 
     stimCode = find(strcmp(cellstr(stimLabels), char(currStim)), 1);
     sizeCode = find(sizeVals == currSize, 1);
+
     currContrastLevels = contrastValuesByStim.(char(currStim));
     contrastCode = find(currContrastLevels == currContrast, 1);
-    stimDirCode = find(dirVals == currDir, 1);
+
+    stimDirCode = find(abs(dirVals - currDir) < 1e-10, 1);
+
+    if isempty(stimCode) || isempty(sizeCode) || isempty(contrastCode) || isempty(stimDirCode)
+        error('Could not map condition ID %d to summary label.', condID);
+    end
 
     panelCondIndex = (stimCode - 1) * 4 + (sizeCode - 1) * 2 + contrastCode;
 
@@ -1280,6 +1295,67 @@ conditionMap.meta.stimDirLabels = stimDirLabels;
 conditionMap.meta.stimDirValues = dirVals;
 conditionMap.meta.panelCondLabels = condLabels;
 conditionMap.meta.panelCondShortLabels = condShortLabels;
+end
+
+function d = getConditionEffectiveDirCanonicalLocal(condEntry, condID)
+% Return canonical effective direction from one condition_full entry.
+%
+% This is an after-the-fact correction for model_data generated before
+% angle normalization was added upstream. It makes equivalent angles such as
+% 360/0 and -10/350 identical during downstream analysis.
+
+if nargin < 2
+    condID = NaN;
+end
+
+if ~isfield(condEntry, 'stim_name')
+    error('condition_full(%d) missing field stim_name.', condID);
+end
+
+currStim = lower(string(condEntry.stim_name));
+
+if currStim == "plaid"
+    if ~isfield(condEntry, 'plaid_dir')
+        error('condition_full(%d) missing field plaid_dir.', condID);
+    end
+    d = condEntry.plaid_dir;
+
+elseif currStim == "grating"
+    if ~isfield(condEntry, 'grating_dir')
+        error('condition_full(%d) missing field grating_dir.', condID);
+    end
+    d = condEntry.grating_dir;
+
+else
+    error('Unsupported stim_name in condition_full(%d): %s', condID, char(currStim));
+end
+
+d = canonicalAngle360Local(d);
+
+end
+
+function a = canonicalAngle360Local(a)
+% Convert degree angles to canonical [0, 360).
+%
+% Examples:
+%   360  -> 0
+%   -10  -> 350
+%   720  -> 0
+%
+% NaN remains NaN.
+
+a = double(a);
+finiteMask = isfinite(a);
+
+a(finiteMask) = mod(a(finiteMask), 360);
+
+tol = 1e-10;
+
+nearInteger = finiteMask & abs(a - round(a)) < tol;
+a(nearInteger) = round(a(nearInteger));
+
+a(finiteMask & abs(a) < tol) = 0;
+a(finiteMask & abs(a - 360) < tol) = 0;
 
 end
 
