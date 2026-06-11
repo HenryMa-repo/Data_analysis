@@ -80,15 +80,15 @@ pick_contrast = 2;
 %   y
 %
 % Base noiseless reconstruction fields after data_reconstruction.m:
-%   seqEst(n).d
-%   seqEst(n).yRecon_use_across
-%   seqEst(n).yRecon_use_within
-%   seqEst(n).yRecon_use_all
-%   seqEst(n).yRecon_use_across_no_d
-%   seqEst(n).yRecon_use_within_no_d
-%   seqEst(n).yRecon_use_all_no_d
-%   seqEst(n).yRecon_across_excl_within
-%   seqEst(n).yRecon_within_excl_across
+%   d
+%   yRecon_use_across
+%   yRecon_use_within
+%   yRecon_use_all
+%   yRecon_use_across_no_d
+%   yRecon_use_within_no_d
+%   yRecon_use_all_no_d
+%   yRecon_across_excl_within
+%   yRecon_within_excl_across
 %
 % Reconstruction fields with R noise, if generated:
 %   yRecon_use_across_with_R
@@ -109,8 +109,7 @@ baseline_fields = {'y'};
 
 % Compared fields used on y-axis.
 comparation_fields = { ...
-'yRecon_use_all'
-    };
+    'yRecon_use_all'};
 
 % Metrics to compare.
 % Available from plot_size_effect.m:
@@ -124,10 +123,10 @@ metrics = {'S_norm_diff'};
 group_names = {};
 
 % Save options.
-save_fig = true;
+save_fig = false;
 save_png = true;
 save_matlab_fig = true;
-close_after_save = true;
+close_after_save = false;
 
 % Figure options.
 figure_visible = 'on';
@@ -155,6 +154,47 @@ fig_base_width_per_col = 470;
 fig_base_height_per_row = 420;
 fig_min_width = 900;
 fig_min_height = 600;
+
+% Broken-axis display for comparison scatter.
+% This does not delete or hide data points. It transforms display
+% coordinates so that the central region is linear and extreme tails are
+% compressed into short display regions, similar to plot_size_effect.m.
+%
+% false: full linear axis, old behavior.
+% true : use broken-axis display if extreme values stretch the full range.
+use_broken_axis_display = true;
+
+% Percentile of abs(metric values) used to start the broken-axis tail.
+% 98 means the central 98%% by absolute value remains linear.
+break_start_prctile = 98.0;
+
+% Trigger based on raw_abs_max / break_start.
+% 1 always applies broken-axis display when use_broken_axis_display is true
+% and raw_abs_max is larger than break_start.
+% Larger values only use broken-axis display when extremes are severe.
+broken_axis_trigger_ratio = 1;
+
+% Fraction of the central linear half-axis used to display each compressed
+% tail. Larger values make the extreme tails occupy more visible space.
+tail_display_frac = 0.08;
+
+% Visual gap between the central linear region and each compressed tail.
+break_gap_frac = 0.03;
+
+% Keep x/y limits identical and symmetric around zero. This is recommended
+% for comparison scatter plots because y = x, x = 0, and y = 0 are reference
+% structures.
+force_symmetric_broken_axis = false;
+
+% Add a suffix to output figure names when broken-axis display is actually
+% used. This prevents broken-axis figures from overwriting full-range figures.
+add_broken_axis_suffix_to_output = true;
+broken_axis_file_suffix = '_brokenaxis';
+
+% Draw small slash marks at the broken parts of the x and y axes, matching
+% the visual convention used in plot_size_effect.m.
+draw_broken_axis_marks = true;
+break_mark_line_width = 1.2;
 
 %% ----------------------- Main setup -----------------------
 
@@ -255,7 +295,7 @@ figHeight = max(fig_min_height, fig_base_height_per_row * nRows);
 for m = 1:numel(metrics)
 
     metric_name = metrics{m};
-    safe_metric = sanitize_filename_local(metric_name);
+    any_broken_axis_this_metric = false;
 
     fprintf('\n============================================================\n');
     fprintf('Plotting metric %d/%d: %s\n', m, numel(metrics), metric_name);
@@ -313,31 +353,34 @@ for m = 1:numel(metrics)
             all_x = x_all(valid_all);
             all_y = y_all(valid_all);
 
-            [axis_min, axis_max] = compute_shared_axis_limits_local(all_x, all_y);
+            axis_info = compute_symmetric_broken_axis_info_local( ...
+                all_x, all_y, ...
+                use_broken_axis_display, ...
+                break_start_prctile, ...
+                broken_axis_trigger_ratio, ...
+                tail_display_frac, ...
+                break_gap_frac, ...
+                force_symmetric_broken_axis);
 
-            % Force every panel to contain zero, so x = 0 and y = 0
-            % reference lines are always visible.
-            axis_min = min(axis_min, 0);
-            axis_max = max(axis_max, 0);
+            any_broken_axis_this_metric = any_broken_axis_this_metric || axis_info.use_broken_axis;
 
-            if axis_min == axis_max
-                axis_min = axis_min - 1;
-                axis_max = axis_max + 1;
-            end
-
-            % Diagonal reference line y = x.
-            plot(ax, [axis_min axis_max], [axis_min axis_max], ...
-                reference_line_style, ...
-                'LineWidth', reference_line_width, ...
-                'HandleVisibility', 'off');
+            % Diagonal reference line y = x. For broken-axis display,
+            % draw the linear central segment and compressed tail segments
+            % separately, so the skipped raw interval is visibly broken.
+            plot_diagonal_reference_line_local( ...
+                ax, axis_info, reference_line_style, reference_line_width);
 
             % Zero reference lines x = 0 and y = 0.
-            plot(ax, [0 0], [axis_min axis_max], ...
+            zero_plot = broken_axis_transform_signed_local(0, axis_info);
+
+            plot(ax, [zero_plot zero_plot], ...
+                [axis_info.plot_axis_min axis_info.plot_axis_max], ...
                 reference_line_style, ...
                 'LineWidth', zero_line_width, ...
                 'HandleVisibility', 'off');
 
-            plot(ax, [axis_min axis_max], [0 0], ...
+            plot(ax, [axis_info.plot_axis_min axis_info.plot_axis_max], ...
+                [zero_plot zero_plot], ...
                 reference_line_style, ...
                 'LineWidth', zero_line_width, ...
                 'HandleVisibility', 'off');
@@ -356,10 +399,13 @@ for m = 1:numel(metrics)
                     continue;
                 end
 
+                x_plot = broken_axis_transform_signed_local(x, axis_info);
+                y_plot = broken_axis_transform_signed_local(y, axis_info);
+
                 thisColor = group_colors(g, :);
 
                 if use_marker_alpha
-                    h = scatter(ax, x, y, marker_size, ...
+                    h = scatter(ax, x_plot, y_plot, marker_size, ...
                         'filled', ...
                         'MarkerFaceColor', thisColor, ...
                         'MarkerEdgeColor', thisColor, ...
@@ -367,7 +413,7 @@ for m = 1:numel(metrics)
                         'MarkerEdgeAlpha', marker_alpha, ...
                         'DisplayName', group_names{g});
                 else
-                    h = scatter(ax, x, y, marker_size, ...
+                    h = scatter(ax, x_plot, y_plot, marker_size, ...
                         'filled', ...
                         'MarkerFaceColor', thisColor, ...
                         'MarkerEdgeColor', thisColor, ...
@@ -380,8 +426,12 @@ for m = 1:numel(metrics)
             end
 
             axis(ax, 'square');
-            xlim(ax, [axis_min axis_max]);
-            ylim(ax, [axis_min axis_max]);
+            xlim(ax, [axis_info.plot_axis_min axis_info.plot_axis_max]);
+            ylim(ax, [axis_info.plot_axis_min axis_info.plot_axis_max]);
+            xticks(ax, axis_info.plot_ticks);
+            yticks(ax, axis_info.plot_ticks);
+            xticklabels(ax, axis_info.tick_labels);
+            yticklabels(ax, axis_info.tick_labels);
 
             xlabel(ax, sprintf('%s %s', baseline_field, metric_label_local(metric_name)), ...
                 'Interpreter', 'none');
@@ -389,11 +439,16 @@ for m = 1:numel(metrics)
             ylabel(ax, sprintf('%s %s', comparation_field, metric_label_local(metric_name)), ...
                 'Interpreter', 'none');
 
-            title(ax, sprintf('base: %s\ncompared: %s', ...
-                baseline_field, comparation_field), ...
-                'Interpreter', 'none');
+            panel_title = sprintf('base: %s\ncompared: %s', ...
+                baseline_field, comparation_field);
+
+            title(ax, panel_title, 'Interpreter', 'none');
 
             clean_axis_local(ax);
+
+            if axis_info.use_broken_axis && draw_broken_axis_marks
+                draw_axis_break_marks_signed_local(ax, axis_info, break_mark_line_width);
+            end
         end
     end
 
@@ -411,10 +466,15 @@ for m = 1:numel(metrics)
         lgd.Layout.Tile = 'east';
     end
 
-metric_file_tag = metric_to_file_tag_local(metric_name);
+    metric_file_tag = metric_to_file_tag_local(metric_name);
 
-output_base_name = sprintf('%s_%s_%s%s', ...
-    output_prefix, metric_file_tag, mode_file_tag, contrast_filter.file_suffix);
+    output_suffix = contrast_filter.file_suffix;
+    if add_broken_axis_suffix_to_output && any_broken_axis_this_metric
+        output_suffix = [output_suffix, broken_axis_file_suffix];
+    end
+
+    output_base_name = sprintf('%s_%s_%s%s', ...
+        output_prefix, metric_file_tag, mode_file_tag, output_suffix);
 
     if save_fig
         save_current_figure_local(hfig, io_dir, output_base_name, ...
@@ -765,29 +825,505 @@ function group_row_ranges = build_group_row_ranges_local(groupd)
     end
 end
 
-function [axis_min, axis_max] = compute_shared_axis_limits_local(x, y)
+function axis_info = compute_symmetric_broken_axis_info_local( ...
+    x, y, use_broken_axis_display, break_start_prctile, ...
+    broken_axis_trigger_ratio, tail_display_frac, break_gap_frac, ...
+    force_symmetric_broken_axis)
+% Compute display transform information for a signed symmetric broken axis.
+%
+% This does not remove points. It maps raw metric values to plotting
+% coordinates. Values within [-break_start, break_start] are shown linearly.
+% Extreme positive and negative tails are compressed into short display
+% regions.
+
+    if nargin < 3 || isempty(use_broken_axis_display)
+        use_broken_axis_display = false;
+    end
+
+    if nargin < 4 || isempty(break_start_prctile)
+        break_start_prctile = 98.0;
+    end
+
+    if nargin < 5 || isempty(broken_axis_trigger_ratio)
+        broken_axis_trigger_ratio = 1;
+    end
+
+    if nargin < 6 || isempty(tail_display_frac)
+        tail_display_frac = 0.08;
+    end
+
+    if nargin < 7 || isempty(break_gap_frac)
+        break_gap_frac = 0.03;
+    end
+
+    if nargin < 8 || isempty(force_symmetric_broken_axis)
+        force_symmetric_broken_axis = true;
+    end
+
+    if ~(isscalar(break_start_prctile) && isfinite(break_start_prctile) ...
+            && break_start_prctile > 0 && break_start_prctile < 100)
+        error('break_start_prctile must be a scalar between 0 and 100.');
+    end
+
+    if ~(isscalar(broken_axis_trigger_ratio) && isfinite(broken_axis_trigger_ratio) ...
+            && broken_axis_trigger_ratio >= 1)
+        error('broken_axis_trigger_ratio must be a finite scalar >= 1.');
+    end
+
     vals = [x(:); y(:)];
     vals = vals(isfinite(vals));
 
+    axis_info = struct();
+    axis_info.use_broken_axis = false;
+    axis_info.break_start_prctile = break_start_prctile;
+    axis_info.broken_axis_trigger_ratio = broken_axis_trigger_ratio;
+    axis_info.tail_display_frac = tail_display_frac;
+    axis_info.break_gap_frac = break_gap_frac;
+    axis_info.raw_axis_min = NaN;
+    axis_info.raw_axis_max = NaN;
+    axis_info.raw_abs_max = NaN;
+    axis_info.break_start = NaN;
+    axis_info.break_end = NaN;
+    axis_info.tail_display_len = NaN;
+    axis_info.break_gap = NaN;
+    axis_info.plot_axis_min = NaN;
+    axis_info.plot_axis_max = NaN;
+    axis_info.plot_ticks = [];
+    axis_info.tick_labels = {};
+
     if isempty(vals)
-        axis_min = -1;
-        axis_max = 1;
+        axis_info.raw_axis_min = -1;
+        axis_info.raw_axis_max = 1;
+        axis_info.raw_abs_max = 1;
+        axis_info.break_start = 1;
+        axis_info.break_end = 1;
+        axis_info.tail_display_len = 0;
+        axis_info.break_gap = 0;
+        axis_info.plot_axis_min = -1;
+        axis_info.plot_axis_max = 1;
+        [axis_info.plot_ticks, axis_info.tick_labels] = build_broken_axis_ticks_local(axis_info);
         return;
     end
 
-    axis_min = min(vals);
-    axis_max = max(vals);
+    raw_min = min(vals);
+    raw_max = max(vals);
+    raw_abs_max = max(abs([raw_min, raw_max]));
 
-    if axis_min == axis_max
-        pad = max(1e-6, abs(axis_min) * 0.05);
-        axis_min = axis_min - pad;
-        axis_max = axis_max + pad;
+    if raw_abs_max <= 0 || ~isfinite(raw_abs_max)
+        raw_abs_max = 1;
+    end
+
+    if force_symmetric_broken_axis
+        raw_axis_min = -raw_abs_max;
+        raw_axis_max = raw_abs_max;
+    else
+        raw_axis_min = raw_min;
+        raw_axis_max = raw_max;
+    end
+
+    abs_vals = abs(vals);
+    abs_vals = abs_vals(isfinite(abs_vals));
+    break_start = percentile_local(abs_vals, break_start_prctile);
+
+    if isempty(break_start) || ~isfinite(break_start) || break_start <= 0
+        break_start = raw_abs_max;
+    end
+
+    use_broken_axis = use_broken_axis_display ...
+        && raw_abs_max > break_start * broken_axis_trigger_ratio;
+
+    axis_info.raw_axis_min = raw_axis_min;
+    axis_info.raw_axis_max = raw_axis_max;
+    axis_info.raw_abs_max = raw_abs_max;
+
+    if ~use_broken_axis
+        axis_info.break_start = raw_abs_max;
+        axis_info.break_end = raw_abs_max;
+        axis_info.tail_display_len = 0;
+        axis_info.break_gap = 0;
+        axis_info.plot_axis_min = raw_axis_min;
+        axis_info.plot_axis_max = raw_axis_max;
+
+        pad = 0.06 * max(eps, axis_info.plot_axis_max - axis_info.plot_axis_min);
+        axis_info.plot_axis_min = axis_info.plot_axis_min - pad;
+        axis_info.plot_axis_max = axis_info.plot_axis_max + pad;
+
+        [axis_info.plot_ticks, axis_info.tick_labels] = build_broken_axis_ticks_local(axis_info);
         return;
     end
 
-    pad = 0.06 * (axis_max - axis_min);
-    axis_min = axis_min - pad;
-    axis_max = axis_max + pad;
+    high_abs_vals = abs_vals(abs_vals > break_start);
+    break_end = min(high_abs_vals);
+
+    if isempty(break_end) || ~isfinite(break_end) || break_end <= break_start
+        break_end = break_start;
+    end
+
+    tail_display_len = max(eps, break_start * tail_display_frac);
+    break_gap = max(eps, break_start * break_gap_frac);
+
+    axis_info.use_broken_axis = true;
+    axis_info.break_start = break_start;
+    axis_info.break_end = break_end;
+    axis_info.tail_display_len = tail_display_len;
+    axis_info.break_gap = break_gap;
+
+    plot_min = broken_axis_transform_signed_local(raw_axis_min, axis_info);
+    plot_max = broken_axis_transform_signed_local(raw_axis_max, axis_info);
+
+    if force_symmetric_broken_axis
+        plot_abs_max = max(abs([plot_min, plot_max]));
+        plot_min = -plot_abs_max;
+        plot_max = plot_abs_max;
+    end
+
+    pad = 0.06 * max(eps, plot_max - plot_min);
+    axis_info.plot_axis_min = plot_min - pad;
+    axis_info.plot_axis_max = plot_max + pad;
+
+    [axis_info.plot_ticks, axis_info.tick_labels] = build_broken_axis_ticks_local(axis_info);
+end
+
+function x_plot = broken_axis_transform_signed_local(x_raw, axis_info)
+% Signed broken-axis transform.
+%
+% For |x| <= break_start:
+%   x_plot = x_raw
+%
+% For break_start < |x| < break_end:
+%   this skipped raw interval is mapped into the visual break gap.
+%
+% For |x| >= break_end:
+%   the interval [break_end, raw_abs_max] is linearly compressed into
+%   [break_start + break_gap, break_start + break_gap + tail_display_len].
+
+    x_plot = x_raw;
+
+    if ~axis_info.use_broken_axis
+        return;
+    end
+
+    sgn = sign(x_raw);
+    ax = abs(x_raw);
+
+    break_start = axis_info.break_start;
+    break_end = axis_info.break_end;
+    raw_abs_max = axis_info.raw_abs_max;
+    tail_display_len = axis_info.tail_display_len;
+    break_gap = axis_info.break_gap;
+
+    x_plot_abs = ax;
+
+    gap_mask = ax > break_start & ax < break_end;
+    tail_mask = ax >= break_end;
+
+    if break_end > break_start
+        x_plot_abs(gap_mask) = break_start ...
+            + (ax(gap_mask) - break_start) ./ (break_end - break_start) .* break_gap;
+    else
+        x_plot_abs(gap_mask) = break_start + break_gap;
+    end
+
+    if raw_abs_max > break_end
+        x_plot_abs(tail_mask) = break_start + break_gap ...
+            + (ax(tail_mask) - break_end) ./ (raw_abs_max - break_end) .* tail_display_len;
+    else
+        x_plot_abs(tail_mask) = break_start + break_gap + tail_display_len;
+    end
+
+    x_plot = sgn .* x_plot_abs;
+end
+
+function [plot_ticks, tick_labels] = build_broken_axis_ticks_local(axis_info)
+% Build ticks in plot coordinates with labels in raw coordinates.
+%
+% In broken-axis mode, tick labels are kept in the pre-break linear region
+% only. The compressed tail still contains all points, but its extreme raw
+% values are not labeled, matching plot_size_effect.m.
+
+    if axis_info.use_broken_axis
+        raw_ticks = choose_prebreak_ticks_signed_local(axis_info.break_start);
+        raw_ticks = unique_with_tolerance_local(raw_ticks, 1e-10);
+        plot_ticks = broken_axis_transform_signed_local(raw_ticks, axis_info);
+        tick_labels = compose_numeric_tick_labels_local(raw_ticks);
+    else
+        raw_ticks = choose_linear_ticks_symmetric_local( ...
+            axis_info.raw_axis_min, axis_info.raw_axis_max);
+        plot_ticks = raw_ticks;
+        tick_labels = compose_numeric_tick_labels_local(raw_ticks);
+    end
+end
+
+function raw_ticks = choose_prebreak_ticks_signed_local(prebreak_abs_max)
+% Choose simple signed ticks for the linear part of a broken axis.
+
+    if isempty(prebreak_abs_max) || ~isfinite(prebreak_abs_max) || prebreak_abs_max <= 0
+        raw_ticks = 0;
+        return;
+    end
+
+    target_intervals = 4;
+    rough_step = (2 * prebreak_abs_max) / target_intervals;
+    step = choose_nice_numeric_step_local(rough_step);
+
+    if step <= 0 || ~isfinite(step)
+        raw_ticks = linspace(-prebreak_abs_max, prebreak_abs_max, 5);
+        raw_ticks(abs(raw_ticks) < 1e-12) = 0;
+        return;
+    end
+
+    max_tick = floor(prebreak_abs_max / step) * step;
+
+    if max_tick <= 0
+        raw_ticks = [-prebreak_abs_max, 0, prebreak_abs_max];
+    else
+        raw_ticks = -max_tick:step:max_tick;
+        if ~any(abs(raw_ticks) < 1e-12)
+            raw_ticks = sort([raw_ticks, 0]);
+        end
+    end
+
+    raw_ticks(abs(raw_ticks) < 1e-12) = 0;
+end
+
+function step = choose_nice_numeric_step_local(rough_step)
+% Choose a nice numeric tick step.
+
+    if rough_step <= 0 || ~isfinite(rough_step)
+        step = 1;
+        return;
+    end
+
+    exponent = floor(log10(rough_step));
+    base = 10 ^ exponent;
+
+    candidates = [1 2 2.5 5 10] * base;
+    candidates = candidates(candidates >= rough_step);
+
+    if isempty(candidates)
+        step = 10 * base;
+    else
+        step = candidates(1);
+    end
+end
+
+function ticks = choose_linear_ticks_symmetric_local(axis_min, axis_max)
+% Choose simple ticks for a linear signed axis.
+
+    lim = max(abs([axis_min, axis_max]));
+    if lim <= 0 || ~isfinite(lim)
+        lim = 1;
+    end
+
+    ticks = linspace(-lim, lim, 5);
+end
+
+function vals_unique = unique_with_tolerance_local(vals, tol)
+% Unique values preserving order with tolerance.
+
+    vals = vals(:)';
+    vals_unique = [];
+
+    for i = 1:numel(vals)
+        if isempty(vals_unique) || all(abs(vals(i) - vals_unique) > tol)
+            vals_unique(end+1) = vals(i); %#ok<AGROW>
+        end
+    end
+end
+
+function labels = compose_numeric_tick_labels_local(vals)
+% Compact numeric tick labels.
+
+    labels = cell(size(vals));
+
+    for i = 1:numel(vals)
+        v = vals(i);
+
+        if abs(v) < 1e-12
+            v = 0;
+        end
+
+        if abs(v) >= 1000 || (abs(v) > 0 && abs(v) < 0.001)
+            labels{i} = sprintf('%.2g', v);
+        elseif abs(v - round(v)) < 1e-10
+            labels{i} = sprintf('%d', round(v));
+        else
+            labels{i} = sprintf('%.3g', v);
+        end
+    end
+end
+
+function plot_diagonal_reference_line_local(ax, axis_info, line_style, line_width)
+% Plot y = x in display coordinates.
+%
+% In broken-axis mode, draw separate central and tail segments so the
+% diagonal line does not visually bridge the broken raw interval.
+
+    if ~axis_info.use_broken_axis
+        raw_ref = linspace(axis_info.raw_axis_min, axis_info.raw_axis_max, 300);
+        plot_ref = broken_axis_transform_signed_local(raw_ref, axis_info);
+
+        plot(ax, plot_ref, plot_ref, ...
+            line_style, ...
+            'LineWidth', line_width, ...
+            'HandleVisibility', 'off');
+        return;
+    end
+
+    % Central linear part.
+    lo = max(axis_info.raw_axis_min, -axis_info.break_start);
+    hi = min(axis_info.raw_axis_max, axis_info.break_start);
+
+    if hi > lo
+        raw_ref = linspace(lo, hi, 150);
+        plot_ref = broken_axis_transform_signed_local(raw_ref, axis_info);
+        plot(ax, plot_ref, plot_ref, ...
+            line_style, ...
+            'LineWidth', line_width, ...
+            'HandleVisibility', 'off');
+    end
+
+    % Positive compressed tail.
+    if axis_info.raw_axis_max >= axis_info.break_end
+        lo = max(axis_info.break_end, axis_info.raw_axis_min);
+        hi = axis_info.raw_axis_max;
+
+        if hi > lo
+            raw_ref = linspace(lo, hi, 100);
+            plot_ref = broken_axis_transform_signed_local(raw_ref, axis_info);
+            plot(ax, plot_ref, plot_ref, ...
+                line_style, ...
+                'LineWidth', line_width, ...
+                'HandleVisibility', 'off');
+        end
+    end
+
+    % Negative compressed tail.
+    if axis_info.raw_axis_min <= -axis_info.break_end
+        lo = axis_info.raw_axis_min;
+        hi = min(-axis_info.break_end, axis_info.raw_axis_max);
+
+        if hi > lo
+            raw_ref = linspace(lo, hi, 100);
+            plot_ref = broken_axis_transform_signed_local(raw_ref, axis_info);
+            plot(ax, plot_ref, plot_ref, ...
+                line_style, ...
+                'LineWidth', line_width, ...
+                'HandleVisibility', 'off');
+        end
+    end
+end
+
+function draw_axis_break_marks_signed_local(ax, axis_info, line_width)
+% Draw slash marks on the broken parts of the x and y axes.
+%
+% This follows the same visual idea as plot_size_effect.m, extended to a
+% signed symmetric axis. Marks are placed at positive and/or negative breaks
+% when those raw ranges are displayed.
+
+    if ~axis_info.use_broken_axis
+        return;
+    end
+
+    if nargin < 3 || isempty(line_width)
+        line_width = 1.2;
+    end
+
+    axes(ax); %#ok<LAXES>
+    hold(ax, 'on');
+
+    xLim = ax.XLim;
+    yLim = ax.YLim;
+
+    display_span = max(eps, max([diff(xLim), diff(yLim)]));
+    slash_dx = display_span * 0.012;
+    slash_dy = display_span * 0.025;
+    offset = display_span * 0.018;
+
+    x0 = xLim(1);
+    y0 = yLim(1);
+
+    break_center_abs = axis_info.break_start + axis_info.break_gap / 2;
+
+    x_centers = [];
+    if axis_info.raw_axis_max > axis_info.break_start
+        x_centers(end+1) = break_center_abs; %#ok<AGROW>
+    end
+    if axis_info.raw_axis_min < -axis_info.break_start
+        x_centers(end+1) = -break_center_abs; %#ok<AGROW>
+    end
+
+    for i = 1:numel(x_centers)
+        xc = x_centers(i);
+
+        plot(ax, ...
+            [xc - slash_dx, xc + slash_dx], ...
+            [y0 + slash_dy, y0 - slash_dy], ...
+            'k-', 'LineWidth', line_width, 'Clipping', 'off', ...
+            'HandleVisibility', 'off');
+
+        plot(ax, ...
+            [xc - slash_dx + offset, xc + slash_dx + offset], ...
+            [y0 + slash_dy, y0 - slash_dy], ...
+            'k-', 'LineWidth', line_width, 'Clipping', 'off', ...
+            'HandleVisibility', 'off');
+    end
+
+    y_centers = [];
+    if axis_info.raw_axis_max > axis_info.break_start
+        y_centers(end+1) = break_center_abs; %#ok<AGROW>
+    end
+    if axis_info.raw_axis_min < -axis_info.break_start
+        y_centers(end+1) = -break_center_abs; %#ok<AGROW>
+    end
+
+    for i = 1:numel(y_centers)
+        yc = y_centers(i);
+
+        plot(ax, ...
+            [x0 + slash_dx, x0 - slash_dx], ...
+            [yc - slash_dy, yc + slash_dy], ...
+            'k-', 'LineWidth', line_width, 'Clipping', 'off', ...
+            'HandleVisibility', 'off');
+
+        plot(ax, ...
+            [x0 + slash_dx, x0 - slash_dx], ...
+            [yc - slash_dy + offset, yc + slash_dy + offset], ...
+            'k-', 'LineWidth', line_width, 'Clipping', 'off', ...
+            'HandleVisibility', 'off');
+    end
+end
+
+function q = percentile_local(x, p)
+% Small local percentile helper to avoid Statistics Toolbox dependency.
+
+    x = x(:);
+    x = x(isfinite(x));
+
+    if isempty(x)
+        q = NaN;
+        return;
+    end
+
+    x = sort(x);
+    n = numel(x);
+
+    if n == 1
+        q = x;
+        return;
+    end
+
+    p = max(0, min(100, p));
+    pos = 1 + (n - 1) * p / 100;
+    lo = floor(pos);
+    hi = ceil(pos);
+
+    if lo == hi
+        q = x(lo);
+    else
+        w = pos - lo;
+        q = (1 - w) * x(lo) + w * x(hi);
+    end
 end
 
 function label = metric_label_local(metric_name)
@@ -804,16 +1340,6 @@ function label = metric_label_local(metric_name)
         otherwise
             label = metric_name;
     end
-end
-
-function joined_name = join_field_names_for_filename_local(fields)
-    safe_fields = cell(size(fields));
-
-    for i = 1:numel(fields)
-        safe_fields{i} = sanitize_filename_local(fields{i});
-    end
-
-    joined_name = strjoin(safe_fields, '_');
 end
 
 function key = field_to_key_local(field_name)
@@ -926,38 +1452,6 @@ function [nRows, nCols] = choose_panel_layout_local(nPanels, max_panel_cols)
 
     nRows = best_rows;
     nCols = best_cols;
-end
-
-function data_tag = data_content_to_file_tag_local(data_content)
-    switch data_content
-        case 'raw_count'
-            data_tag = 'rc';
-
-        case 'raw_fr'
-            data_tag = 'rfr';
-
-        case 'z_within_trial'
-            data_tag = 'zWT';
-
-        case 'z_within_condition'
-            data_tag = 'zWC';
-
-        case 'z_across_conditions'
-            data_tag = 'zAC';
-
-        case 'demean_count_within_trial'
-            data_tag = 'dcntWT';
-
-        case 'demean_fr_within_trial'
-            data_tag = 'dfrWT';
-
-        case 'demean_pooledsd_within_condition'
-            data_tag = 'dpsdWC';
-
-        otherwise
-            data_tag = sanitize_filename_local(data_content);
-            data_tag = compress_generic_name_local(data_tag);
-    end
 end
 
 function mode_tag = model_mode_to_file_tag_local(model_mode)
