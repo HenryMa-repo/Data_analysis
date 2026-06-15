@@ -105,11 +105,14 @@ pick_contrast = 2;
 %   yRecon_within_excl_across_keep_resid
 
 % Baseline fields used on x-axis.
-baseline_fields = {'y'};
+baseline_fields = {'yRecon_use_all'};
 
 % Compared fields used on y-axis.
 comparation_fields = { ...
-    'yRecon_use_all'};
+    'yRecon_use_across'...
+    'yRecon_across_excl_within'...
+    'yRecon_use_within'...
+    'yRecon_within_excl_across'};
 
 % Metrics to compare.
 % Available from plot_size_effect.m:
@@ -123,7 +126,7 @@ metrics = {'S_norm_diff'};
 group_names = {};
 
 % Save options.
-save_fig = false;
+save_fig = true;
 save_png = true;
 save_matlab_fig = true;
 close_after_save = false;
@@ -166,7 +169,7 @@ use_broken_axis_display = true;
 
 % Percentile of abs(metric values) used to start the broken-axis tail.
 % 98 means the central 98%% by absolute value remains linear.
-break_start_prctile = 98.0;
+break_start_prctile = 93.0;
 
 % Trigger based on raw_abs_max / break_start.
 % 1 always applies broken-axis display when use_broken_axis_display is true
@@ -180,6 +183,13 @@ tail_display_frac = 0.08;
 
 % Visual gap between the central linear region and each compressed tail.
 break_gap_frac = 0.03;
+
+% Minimum display slope in compressed tail.
+% 1.0 means tail is not compressed.
+% 0.5 means tail distances are shown at half linear scale.
+% 0.2 means tail distances are shown at 20% linear scale.
+% Increase this if tail points look collapsed into vertical/horizontal lines.
+min_tail_display_slope = 0.001;
 
 % Keep x/y limits identical and symmetric around zero. This is recommended
 % for comparison scatter plots because y = x, x = 0, and y = 0 are reference
@@ -353,14 +363,15 @@ for m = 1:numel(metrics)
             all_x = x_all(valid_all);
             all_y = y_all(valid_all);
 
-            axis_info = compute_symmetric_broken_axis_info_local( ...
-                all_x, all_y, ...
-                use_broken_axis_display, ...
-                break_start_prctile, ...
-                broken_axis_trigger_ratio, ...
-                tail_display_frac, ...
-                break_gap_frac, ...
-                force_symmetric_broken_axis);
+axis_info = compute_symmetric_broken_axis_info_local( ...
+    all_x, all_y, ...
+    use_broken_axis_display, ...
+    break_start_prctile, ...
+    broken_axis_trigger_ratio, ...
+    tail_display_frac, ...
+    break_gap_frac, ...
+    min_tail_display_slope, ...
+    force_symmetric_broken_axis);
 
             any_broken_axis_this_metric = any_broken_axis_this_metric || axis_info.use_broken_axis;
 
@@ -828,7 +839,7 @@ end
 function axis_info = compute_symmetric_broken_axis_info_local( ...
     x, y, use_broken_axis_display, break_start_prctile, ...
     broken_axis_trigger_ratio, tail_display_frac, break_gap_frac, ...
-    force_symmetric_broken_axis)
+    min_tail_display_slope, force_symmetric_broken_axis)
 % Compute display transform information for a signed symmetric broken axis.
 %
 % This does not remove points. It maps raw metric values to plotting
@@ -856,9 +867,18 @@ function axis_info = compute_symmetric_broken_axis_info_local( ...
         break_gap_frac = 0.03;
     end
 
-    if nargin < 8 || isempty(force_symmetric_broken_axis)
-        force_symmetric_broken_axis = true;
-    end
+if nargin < 8 || isempty(min_tail_display_slope)
+    min_tail_display_slope = 0.25;
+end
+
+if nargin < 9 || isempty(force_symmetric_broken_axis)
+    force_symmetric_broken_axis = true;
+end
+
+if ~(isscalar(min_tail_display_slope) && isfinite(min_tail_display_slope) ...
+        && min_tail_display_slope > 0 && min_tail_display_slope <= 1)
+    error('min_tail_display_slope must be a finite scalar in (0, 1].');
+end
 
     if ~(isscalar(break_start_prctile) && isfinite(break_start_prctile) ...
             && break_start_prctile > 0 && break_start_prctile < 100)
@@ -879,6 +899,7 @@ function axis_info = compute_symmetric_broken_axis_info_local( ...
     axis_info.broken_axis_trigger_ratio = broken_axis_trigger_ratio;
     axis_info.tail_display_frac = tail_display_frac;
     axis_info.break_gap_frac = break_gap_frac;
+    axis_info.min_tail_display_slope = min_tail_display_slope;
     axis_info.raw_axis_min = NaN;
     axis_info.raw_axis_max = NaN;
     axis_info.raw_abs_max = NaN;
@@ -959,8 +980,13 @@ function axis_info = compute_symmetric_broken_axis_info_local( ...
         break_end = break_start;
     end
 
-    tail_display_len = max(eps, break_start * tail_display_frac);
-    break_gap = max(eps, break_start * break_gap_frac);
+raw_tail_span = max(eps, raw_abs_max - break_end);
+
+tail_display_len_from_frac = max(eps, break_start * tail_display_frac);
+tail_display_len_from_slope = raw_tail_span * min_tail_display_slope;
+
+tail_display_len = max(tail_display_len_from_frac, tail_display_len_from_slope);
+break_gap = max(eps, break_start * break_gap_frac);
 
     axis_info.use_broken_axis = true;
     axis_info.break_start = break_start;
