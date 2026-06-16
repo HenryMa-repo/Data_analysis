@@ -2,7 +2,7 @@
 
 MATLAB scripts for preprocessing sorted electrophysiology data, extracting trial-wise stimulus metadata, preparing DLAG-ready inputs, training DLAG models, and analyzing inferred latent structure.
 
-This repository is a personal working codebase for multi-probe neural population analysis centered on DLAG, or Delayed Latents Across Groups. It is organized as a script-based workflow rather than a packaged MATLAB toolbox. In most cases, open the relevant script, edit the user parameters near the top, and run it for the session or dataset being analyzed.
+This repository is a personal working codebase for multi-probe neural population analysis centered on DLAG (Delayed Latents Across Groups). It is organized as a script-based workflow rather than a packaged MATLAB toolbox. In most cases, open the relevant script, edit the user parameters near the top, and run it for the dataset being analyzed.
 
 ## Overview
 
