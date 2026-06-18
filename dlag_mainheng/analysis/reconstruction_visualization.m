@@ -30,7 +30,7 @@ clear;
 % User parameters
 % -------------------------------------------------------------------------
 
-data_content = 'demean_count_within_trial';
+data_content = 'raw_count';
 % Options usually include:
 %   raw_count
 %   raw_fr
@@ -77,13 +77,26 @@ stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 %     yRecon_across_excl_within_with_R
 %     yRecon_within_excl_across_with_R
 %
-%   If add_keep_resid_reconstruction = true in data_reconstruction.m:
+%   If add_keep_resid_reconstruction = true 
 %     yRecon_use_across_keep_resid
 %     yRecon_use_within_keep_resid
 %     yRecon_use_all_keep_resid
 %     yRecon_across_excl_within_keep_resid
 %     yRecon_within_excl_across_keep_resid
-analysis_fields = {'y', 'yRecon_use_all','yRecon_use_across','yRecon_across_excl_within','yRecon_use_within','yRecon_within_excl_across'};
+
+% if add_directional_reconstruction = true in data_reconstruction.m:
+% -------------------------------------------------------------------------
+%   yRecon_use_feedback
+%   yRecon_feedback_excl_within_ff_ambiguous
+%   yRecon_feedback_excl_within
+%   yRecon_feedback_excl_ff_ambiguous
+%
+%   yRecon_use_feedforward
+%   yRecon_feedforward_excl_within_fb_ambiguous
+%   yRecon_feedforward_excl_within
+%   yRecon_feedforward_excl_fb_ambiguous
+%
+analysis_fields = {'yRecon_use_feedback'};
 
 % Number of randomly selected example neurons per group.
 n_example_neurons = 10;
