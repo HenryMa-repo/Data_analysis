@@ -90,6 +90,16 @@ pick_contrast = 2;
 %   yRecon_across_excl_within
 %   yRecon_within_excl_across
 %
+%   yRecon_use_feedback
+%   yRecon_feedback_excl_within_ff_ambiguous
+%   yRecon_feedback_excl_within
+%   yRecon_feedback_excl_ff_ambiguous
+%
+%   yRecon_use_feedforward
+%   yRecon_feedforward_excl_within_fb_ambiguous
+%   yRecon_feedforward_excl_within
+%   yRecon_feedforward_excl_fb_ambiguous
+%
 % Reconstruction fields with R noise, if generated:
 %   yRecon_use_across_with_R
 %   yRecon_use_within_with_R

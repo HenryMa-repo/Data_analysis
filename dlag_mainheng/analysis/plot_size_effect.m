@@ -103,6 +103,16 @@ runIdx = 1;
 %   seqEst(n).yRecon_across_excl_within
 %   seqEst(n).yRecon_within_excl_across
 %
+%   yRecon_use_feedback
+%   yRecon_feedback_excl_within_ff_ambiguous
+%   yRecon_feedback_excl_within
+%   yRecon_feedback_excl_ff_ambiguous
+%
+%   yRecon_use_feedforward
+%   yRecon_feedforward_excl_within_fb_ambiguous
+%   yRecon_feedforward_excl_within
+%   yRecon_feedforward_excl_fb_ambiguous
+%
 % Reconstruction fields with R noise, if generated:
 %   yRecon_use_across_with_R
 %   yRecon_use_within_with_R
@@ -116,8 +126,12 @@ runIdx = 1;
 %   yRecon_use_all_keep_resid
 %   yRecon_across_excl_within_keep_resid
 %   yRecon_within_excl_across_keep_resid
+
+
+
 analysis_fields = { ...
-    'y', ...
+    'd'...
+     'y', ...
     'yRecon_use_across', ...
     'yRecon_use_within', ...
     'yRecon_use_all', ...
