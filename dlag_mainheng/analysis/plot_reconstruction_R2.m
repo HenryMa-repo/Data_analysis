@@ -1,39 +1,58 @@
 %% plot_reconstruction_R2.m
 % Plot neuron-wise reconstruction R2 comparisons.
 %
-% Run this script after data_reconstruction.m has saved reconstruction_R2.mat.
+% Run this script after:
+%   1) data_reconstruction.m
+%   2) calculate_pooled_conditions_R2.m, if plot_pooled_conditions_R2 = true
 %
-% For each condition, or for pooled all-condition mode, this script plots
-% one 2 x 4 figure:
+% This script supports two plot modes:
 %
-% Row 1:
-%   1) y = use across          , x = use all
-%   2) y = across excl within  , x = use all
-%   3) y = across excl within  , x = use across
-%   4) across delta R2 violin + individual neuron points:
-%        all-use, all-excl, use-excl
+%   plot_mode = 'across_within'
 %
-% Row 2:
-%   5) y = use within          , x = use all
-%   6) y = within excl across  , x = use all
-%   7) y = within excl across  , x = use within
-%   8) within delta R2 violin + individual neuron points:
-%        all-use, all-excl, use-excl
+%       Row 1:
+%         1) y = use_across              , x = use_all
+%         2) y = across_excl_within      , x = use_all
+%         3) y = across_excl_within      , x = use_across
+%         4) across delta R2 violin:
+%              all-use, all-excl, use-excl
+%
+%       Row 2:
+%         5) y = use_within              , x = use_all
+%         6) y = within_excl_across      , x = use_all
+%         7) y = within_excl_across      , x = use_within
+%         8) within delta R2 violin:
+%              all-use, all-excl, use-excl
+%
+%   plot_mode = 'directional_ff_fb'
+%
+%       Row 1:
+%         1) y = use_feedforward                         , x = use_all
+%         2) y = feedforward_excl_within_fb_ambiguous    , x = use_all
+%         3) y = feedforward_excl_within_fb_ambiguous    , x = use_feedforward
+%         4) feedforward delta R2 violin:
+%              all-use, all-excl, use-excl
+%
+%       Row 2:
+%         5) y = use_feedback                            , x = use_all
+%         6) y = feedback_excl_within_ff_ambiguous       , x = use_all
+%         7) y = feedback_excl_within_ff_ambiguous       , x = use_feedback
+%         8) feedback delta R2 violin:
+%              all-use, all-excl, use-excl
 %
 % Each scatter point is one neuron.
 % Group 1 and Group 2 are plotted using different colors.
 %
-% In each-condition mode, this script also optionally plots one extra
+% In each-condition mode, this script can also plot one extra
 % pooled-across-conditions R2 figure, using the output from:
 %   calculate_pooled_conditions_R2.m
 %
-% Condition-wise output files, if enabled:
-%   reconstruction_R2_comparison.fig
-%   reconstruction_R2_comparison.png
+% Condition-wise output files:
+%   reconstruction_R2_comparison_<plot_mode>.fig
+%   reconstruction_R2_comparison_<plot_mode>.png
 %
-% Pooled-condition output files, if enabled:
-%   <data_content>_sum_all_conditions_reconstruction_R2_comparison.fig
-%   <data_content>_sum_all_conditions_reconstruction_R2_comparison.png
+% Pooled-condition output files:
+%   <data_content>_sum_all_conditions_reconstruction_R2_comparison_<plot_mode>.fig
+%   <data_content>_sum_all_conditions_reconstruction_R2_comparison_<plot_mode>.png
 
 clc;
 clear;
@@ -53,6 +72,12 @@ data_condition = [1:16];
 
 runIdx = 1;
 
+% Plot mode.
+% Options:
+%   'across_within'
+%   'directional_ff_fb'
+plot_mode = 'directional_ff_fb';
+
 % Used only in condition mode to get G-S-L / G-L-H / etc.
 dat_file = fullfile('.', 'model_data_allruns');
 stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
@@ -61,7 +86,6 @@ stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
 % This requires calculate_pooled_conditions_R2.m to have been run first.
 plot_pooled_conditions_R2 = true;
 pooled_r2_file_name = sprintf('%s_sum_all_conditions_reconstruction_R2.mat', data_content);
-pooled_fig_base_name = sprintf('%s_sum_all_conditions_reconstruction_R2_comparison', data_content);
 
 % Save switches
 save_fig = true;
@@ -86,7 +110,6 @@ violin_point_jitter_width = 0.08;
 violin_point_alpha = 0.35;
 
 % Same colors as RF_analysis.m.
-% Row 1 is probe 0 / group 1, row 2 is probe 1 / group 2.
 probe_colors = [
     0.0000, 0.4470, 0.7410;
     0.8500, 0.3250, 0.0980
@@ -100,6 +123,14 @@ scriptDir = fileparts(mfilename('fullpath'));
 if isempty(scriptDir)
     scriptDir = pwd;
 end
+
+plotSpec = getPlotModeSpecLocal(plot_mode);
+
+condition_fig_base_name = sprintf('reconstruction_R2_comparison_%s', ...
+    plotSpec.fileSuffix);
+
+pooled_fig_base_name = sprintf('%s_sum_all_conditions_reconstruction_R2_comparison_%s', ...
+    data_content, plotSpec.fileSuffix);
 
 if isempty(data_condition)
     use_condition_mode = false;
@@ -141,7 +172,18 @@ if use_condition_mode
 
     condition_full = model_data_allruns{run_idx}.conditions_full;
     conditionMap = buildConditionSummaryMapLocal(condition_full, condition_list);
+
     stim_abbrev = {conditionMap.entries.panelCondShortLabel};
+end
+
+fprintf('\n============================================================\n');
+fprintf('Plot reconstruction R2\n');
+fprintf('data_content: %s\n', data_content);
+fprintf('plot_mode: %s\n', plotSpec.modeName);
+fprintf('figure suffix: %s\n', plotSpec.fileSuffix);
+fprintf('Required recon_R2 fields:\n');
+for i = 1:numel(plotSpec.requiredTopFields)
+    fprintf('  %s\n', plotSpec.requiredTopFields{i});
 end
 
 %% ------------------------------------------------------------------------
@@ -185,11 +227,12 @@ for cond_i = 1:numConditions
 
     recon_R2 = S.recon_R2;
 
-    checkReconR2FieldsLocal(recon_R2);
+    checkReconR2FieldsLocal(recon_R2, plotSpec.requiredTopFields);
 
     fig = plotOneReconstructionR2FigureLocal( ...
         recon_R2, ...
         titleLabel, ...
+        plotSpec, ...
         probe_colors, ...
         marker_size, ...
         use_marker_alpha, ...
@@ -203,13 +246,13 @@ for cond_i = 1:numConditions
         violin_point_alpha);
 
     if save_fig
-        figFile = fullfile(tempfname, 'reconstruction_R2_comparison.fig');
+        figFile = fullfile(tempfname, [condition_fig_base_name, '.fig']);
         savefig(fig, figFile);
         fprintf('Saved FIG: %s\n', figFile);
     end
 
     if save_png
-        pngFile = fullfile(tempfname, 'reconstruction_R2_comparison.png');
+        pngFile = fullfile(tempfname, [condition_fig_base_name, '.png']);
         savePngLocal(fig, pngFile, png_dpi);
         fprintf('Saved PNG: %s\n', pngFile);
     end
@@ -244,13 +287,14 @@ if use_condition_mode && plot_pooled_conditions_R2
 
     recon_R2 = S.recon_R2;
 
-    checkReconR2FieldsLocal(recon_R2);
+    checkReconR2FieldsLocal(recon_R2, plotSpec.requiredTopFields);
 
     pooledTitleLabel = 'sum all conditions | condition-specific models';
 
     fig = plotOneReconstructionR2FigureLocal( ...
         recon_R2, ...
         pooledTitleLabel, ...
+        plotSpec, ...
         probe_colors, ...
         marker_size, ...
         use_marker_alpha, ...
@@ -286,21 +330,119 @@ fprintf('\nDone.\n');
 % Local functions
 % ========================================================================
 
+function plotSpec = getPlotModeSpecLocal(plot_mode)
+% Return plot specification for the selected plot mode.
+%
+% scatterSpecs columns:
+%   1) tile index
+%   2) x field
+%   3) x label
+%   4) y field
+%   5) y label
+%
+% deltaSpecs fields:
+%   tileIdx
+%   useField
+%   exclField
+%   plotTitle
+%
+% Delta definitions:
+%   all-use  = use_all - useField
+%   all-excl = use_all - exclField
+%   use-excl = useField - exclField
+
+plot_mode = char(string(plot_mode));
+plot_mode = lower(strtrim(plot_mode));
+
+switch plot_mode
+
+    case {'across_within', 'across-within', 'acrosswithin'}
+
+        plotSpec.modeName = 'across_within';
+        plotSpec.fileSuffix = 'across_within';
+        plotSpec.figureName = 'reconstruction R2 comparison: across / within';
+        plotSpec.sgtitleText = 'reconstruction R2 comparison | across / within';
+
+        plotSpec.scatterSpecs = {
+            1, 'use_all',    'use all',    'use_across',          'use across';
+            2, 'use_all',    'use all',    'across_excl_within',  'across excl within';
+            3, 'use_across', 'use across', 'across_excl_within',  'across excl within';
+
+            5, 'use_all',    'use all',    'use_within',          'use within';
+            6, 'use_all',    'use all',    'within_excl_across',  'within excl across';
+            7, 'use_within', 'use within', 'within_excl_across',  'within excl across'
+        };
+
+        plotSpec.deltaSpecs = struct([]);
+
+        plotSpec.deltaSpecs(1).tileIdx = 4;
+        plotSpec.deltaSpecs(1).useField = 'use_across';
+        plotSpec.deltaSpecs(1).exclField = 'across_excl_within';
+        plotSpec.deltaSpecs(1).plotTitle = 'across delta R^2';
+
+        plotSpec.deltaSpecs(2).tileIdx = 8;
+        plotSpec.deltaSpecs(2).useField = 'use_within';
+        plotSpec.deltaSpecs(2).exclField = 'within_excl_across';
+        plotSpec.deltaSpecs(2).plotTitle = 'within delta R^2';
+
+    case {'directional_ff_fb', 'ff_fb', 'fffb', 'feedforward_feedback', ...
+            'feedforward-feedback', 'directional'}
+
+        plotSpec.modeName = 'directional_ff_fb';
+        plotSpec.fileSuffix = 'ff_fb';
+        plotSpec.figureName = 'reconstruction R2 comparison: feedforward / feedback';
+        plotSpec.sgtitleText = 'reconstruction R2 comparison | feedforward / feedback';
+
+        plotSpec.scatterSpecs = {
+            1, 'use_all',         'use all',         'use_feedforward',                         'use feedforward';
+            2, 'use_all',         'use all',         'feedforward_excl_within_fb_ambiguous',    'feedforward excl within fb ambiguous';
+            3, 'use_feedforward', 'use feedforward', 'feedforward_excl_within_fb_ambiguous',    'feedforward excl within fb ambiguous';
+
+            5, 'use_all',         'use all',         'use_feedback',                            'use feedback';
+            6, 'use_all',         'use all',         'feedback_excl_within_ff_ambiguous',       'feedback excl within ff ambiguous';
+            7, 'use_feedback',    'use feedback',    'feedback_excl_within_ff_ambiguous',       'feedback excl within ff ambiguous'
+        };
+
+        plotSpec.deltaSpecs = struct([]);
+
+        plotSpec.deltaSpecs(1).tileIdx = 4;
+        plotSpec.deltaSpecs(1).useField = 'use_feedforward';
+        plotSpec.deltaSpecs(1).exclField = 'feedforward_excl_within_fb_ambiguous';
+        plotSpec.deltaSpecs(1).plotTitle = 'feedforward delta R^2';
+
+        plotSpec.deltaSpecs(2).tileIdx = 8;
+        plotSpec.deltaSpecs(2).useField = 'use_feedback';
+        plotSpec.deltaSpecs(2).exclField = 'feedback_excl_within_ff_ambiguous';
+        plotSpec.deltaSpecs(2).plotTitle = 'feedback delta R^2';
+
+    otherwise
+        error(['Unsupported plot_mode: %s. Valid options are ', ...
+            '''across_within'' and ''directional_ff_fb''.'], plot_mode);
+end
+
+requiredFields = {'use_all'};
+
+for p = 1:size(plotSpec.scatterSpecs, 1)
+    requiredFields{end+1} = plotSpec.scatterSpecs{p, 2}; %#ok<AGROW>
+    requiredFields{end+1} = plotSpec.scatterSpecs{p, 4}; %#ok<AGROW>
+end
+
+for d = 1:numel(plotSpec.deltaSpecs)
+    requiredFields{end+1} = plotSpec.deltaSpecs(d).useField; %#ok<AGROW>
+    requiredFields{end+1} = plotSpec.deltaSpecs(d).exclField; %#ok<AGROW>
+end
+
+plotSpec.requiredTopFields = unique(requiredFields, 'stable');
+end
+
 function fig = plotOneReconstructionR2FigureLocal( ...
-    recon_R2, titleLabel, probe_colors, marker_size, use_marker_alpha, ...
+    recon_R2, titleLabel, plotSpec, probe_colors, marker_size, use_marker_alpha, ...
     figure_visible, violin_width, violin_face_alpha, show_violin_median, ...
     show_violin_points, violin_point_size, violin_point_jitter_width, ...
     violin_point_alpha)
 
-scatterSpecs = {
-    % tile index   x field              x label          y field                 y label
-    1,             'use_all',           'use all',        'use_across',           'use across';
-    2,             'use_all',           'use all',        'across_excl_within',   'across excl within';
-    3,             'use_across',        'use across',     'across_excl_within',   'across excl within';
-    5,             'use_all',           'use all',        'use_within',           'use within';
-    6,             'use_all',           'use all',        'within_excl_across',   'within excl across';
-    7,             'use_within',        'use within',     'within_excl_across',   'within excl across'
-};
+scatterSpecs = plotSpec.scatterSpecs;
+deltaSpecs = plotSpec.deltaSpecs;
 
 numScatterPlots = size(scatterSpecs, 1);
 
@@ -317,6 +459,7 @@ end
 allR2Vals = [];
 
 for p = 1:numScatterPlots
+
     xField = scatterSpecs{p, 2};
     yField = scatterSpecs{p, 4};
 
@@ -342,16 +485,19 @@ allR2Vals = allR2Vals(isfinite(allR2Vals));
 r2LimVals = paddedLimitsLocal(allR2Vals, [-1, 1]);
 
 % Build delta R2 values for violin plots.
-deltaAcross = computeDeltaR2ByGroupLocal( ...
-    recon_R2, 'use_across', 'across_excl_within');
-
-deltaWithin = computeDeltaR2ByGroupLocal( ...
-    recon_R2, 'use_within', 'within_excl_across');
+deltaValsByRow = cell(1, numel(deltaSpecs));
 
 allDeltaVals = [];
-for c = 1:3
-    for g = 1:numGroups
-        allDeltaVals = [allDeltaVals; deltaAcross{c, g}(:); deltaWithin{c, g}(:)]; %#ok<AGROW>
+
+for d = 1:numel(deltaSpecs)
+
+    deltaValsByRow{d} = computeDeltaR2ByGroupLocal( ...
+        recon_R2, deltaSpecs(d).useField, deltaSpecs(d).exclField);
+
+    for c = 1:size(deltaValsByRow{d}, 1)
+        for g = 1:numGroups
+            allDeltaVals = [allDeltaVals; deltaValsByRow{d}{c, g}(:)]; %#ok<AGROW>
+        end
     end
 end
 
@@ -359,7 +505,7 @@ allDeltaVals = allDeltaVals(isfinite(allDeltaVals));
 deltaLimVals = paddedLimitsLocal(allDeltaVals, [-1, 1]);
 
 fig = figure( ...
-    'Name', 'reconstruction R2 comparison', ...
+    'Name', plotSpec.figureName, ...
     'Color', 'w', ...
     'Visible', figure_visible, ...
     'Position', [100, 100, 1850, 850]);
@@ -386,7 +532,8 @@ for p = 1:numScatterPlots
     ax = nexttile(t, tileIdx);
     hold(ax, 'on');
 
-    % Diagonal reference line. Do not show this line in legend.
+    % Diagonal reference line.
+    % Do not show this line in legend.
     plot(ax, r2LimVals, r2LimVals, 'k--', ...
         'LineWidth', 1, ...
         'HandleVisibility', 'off');
@@ -415,6 +562,7 @@ for p = 1:numScatterPlots
         end
 
         valid = isfinite(x) & isfinite(y);
+
         x = x(valid);
         y = y(valid);
 
@@ -462,23 +610,26 @@ end
 % Violin plots with individual points
 % -------------------------------------------------------------------------
 
-axAcross = nexttile(t, 4);
-plotDeltaViolinLocal( ...
-    axAcross, deltaAcross, probe_colors, deltaLimVals, ...
-    violin_width, violin_face_alpha, show_violin_median, ...
-    show_violin_points, violin_point_size, violin_point_jitter_width, ...
-    violin_point_alpha, ...
-    'across delta R^2');
+for d = 1:numel(deltaSpecs)
 
-axWithin = nexttile(t, 8);
-plotDeltaViolinLocal( ...
-    axWithin, deltaWithin, probe_colors, deltaLimVals, ...
-    violin_width, violin_face_alpha, show_violin_median, ...
-    show_violin_points, violin_point_size, violin_point_jitter_width, ...
-    violin_point_alpha, ...
-    'within delta R^2');
+    axDelta = nexttile(t, deltaSpecs(d).tileIdx);
 
-sgtitle(t, sprintf('%s | reconstruction R2 comparison', titleLabel), ...
+    plotDeltaViolinLocal( ...
+        axDelta, ...
+        deltaValsByRow{d}, ...
+        probe_colors, ...
+        deltaLimVals, ...
+        violin_width, ...
+        violin_face_alpha, ...
+        show_violin_median, ...
+        show_violin_points, ...
+        violin_point_size, ...
+        violin_point_jitter_width, ...
+        violin_point_alpha, ...
+        deltaSpecs(d).plotTitle);
+end
+
+sgtitle(t, sprintf('%s | %s', titleLabel, plotSpec.sgtitleText), ...
     'Interpreter', 'none');
 end
 
@@ -486,7 +637,7 @@ function deltaVals = computeDeltaR2ByGroupLocal(recon_R2, useField, exclField)
 % Compute three delta R2 types by group:
 %   1) all-use  = use_all - use
 %   2) all-excl = use_all - excl
-%   3) use-excl = use     - excl
+%   3) use-excl = use - excl
 %
 % Output:
 %   deltaVals{deltaType, groupIdx}
@@ -496,6 +647,7 @@ use_by_group = recon_R2.(useField).neuron_by_group;
 excl_by_group = recon_R2.(exclField).neuron_by_group;
 
 numGroups = numel(all_by_group);
+
 deltaVals = cell(3, numGroups);
 
 for g = 1:numGroups
@@ -618,6 +770,7 @@ end
 
 if numel(vals) < 2 || max(vals) == min(vals)
     y0 = vals(1);
+
     plot(ax, [xPos - violin_width * 0.45, xPos + violin_width * 0.45], ...
         [y0, y0], '-', ...
         'Color', thisColor, ...
@@ -631,11 +784,13 @@ end
 
 if isempty(f) || isempty(xi) || max(f) <= 0
     medVal = median(vals);
+
     plot(ax, [xPos - violin_width * 0.45, xPos + violin_width * 0.45], ...
         [medVal, medVal], '-', ...
         'Color', thisColor, ...
         'LineWidth', 2, ...
         'HandleVisibility', 'off');
+
     return;
 end
 
@@ -655,6 +810,7 @@ patch(ax, xPatch, yPatch, thisColor, ...
 
 if showMedian
     medVal = median(vals);
+
     plot(ax, [xPos - violin_width * 0.55, xPos + violin_width * 0.55], ...
         [medVal, medVal], '-', ...
         'Color', thisColor, ...
@@ -705,6 +861,7 @@ xi = edges(1:end-1) + diff(edges) / 2;
 f = counts;
 
 valid = isfinite(f) & isfinite(xi);
+
 f = f(valid);
 xi = xi(valid);
 end
@@ -737,7 +894,6 @@ end
 end
 
 function cleanAxisLocal(ax)
-
 grid(ax, 'off');
 box(ax, 'off');
 
@@ -747,17 +903,11 @@ set(ax, ...
     'FontSize', 11);
 end
 
-function checkReconR2FieldsLocal(recon_R2)
-
-requiredTopFields = {
-    'use_all'
-    'use_across'
-    'across_excl_within'
-    'use_within'
-    'within_excl_across'
-};
+function checkReconR2FieldsLocal(recon_R2, requiredTopFields)
+% Check that all required recon_R2 fields are present and usable.
 
 for i = 1:numel(requiredTopFields)
+
     f = requiredTopFields{i};
 
     if ~isfield(recon_R2, f)
@@ -818,6 +968,7 @@ function all_tags = get_all_run_tagsLocal(model_data_allruns)
 all_tags = cell(numel(model_data_allruns), 1);
 
 for j = 1:numel(model_data_allruns)
+
     if ~isfield(model_data_allruns{j}, 'stim_tag')
         error('stim_tag missing in model_data_allruns{%d}.', j);
     end
@@ -829,10 +980,10 @@ end
 function conditionMap = buildConditionSummaryMapLocal(condition_full, condition_list)
 % Build short labels such as G-S-L, G-S-H, G-L-L, etc.
 %
-% This version uses canonical effective stimulus direction values for
-% old model_data/condition_full files generated before upstream angle
-% normalization. Equivalent angles such as 360/0 and -10/350 are treated
-% as the same direction during downstream summary labeling.
+% This version uses canonical effective stimulus direction values for old
+% model_data/condition_full files generated before upstream angle
+% normalization. Equivalent angles such as 360/0 and -10/350 are treated as
+% the same direction during downstream summary labeling.
 
 if isempty(condition_full)
     error('condition_full is empty.');
@@ -864,7 +1015,6 @@ for k = 1:nAll
     stimNameAll(k) = currStim;
     sizeAll(k) = condition_full(k).size;
     contrastAll(k) = condition_full(k).contrast;
-
     effDirAll(k) = getConditionEffectiveDirCanonicalLocal(condition_full(k), k);
 end
 
@@ -891,6 +1041,7 @@ end
 contrastValuesByStim = struct();
 
 for s = 1:2
+
     idx = (stimNameAll == stimLabels(s));
     cvals = unique(contrastAll(idx));
     cvals = sort(cvals(:)');
@@ -914,15 +1065,17 @@ end
 stimDirLabels = {'stim_dir1', 'stim_dir2'};
 
 condLabels = {
-    'grating-small-low',  'grating-small-high', ...
-    'grating-large-low',  'grating-large-high', ...
-    'plaid-small-low',    'plaid-small-high', ...
-    'plaid-large-low',    'plaid-large-high'
+    'grating-small-low', 'grating-small-high', ...
+    'grating-large-low', 'grating-large-high', ...
+    'plaid-small-low', 'plaid-small-high', ...
+    'plaid-large-low', 'plaid-large-high'
 };
 
 condShortLabels = {
-    'G-S-L', 'G-S-H', 'G-L-L', 'G-L-H', ...
-    'P-S-L', 'P-S-H', 'P-L-L', 'P-L-H'
+    'G-S-L', 'G-S-H', ...
+    'G-L-L', 'G-L-H', ...
+    'P-S-L', 'P-S-H', ...
+    'P-L-L', 'P-L-H'
 };
 
 entries = struct([]);
@@ -948,7 +1101,8 @@ for ii = 1:numel(condition_list)
 
     stimDirCode = find(abs(dirVals - currDir) < 1e-10, 1);
 
-    if isempty(stimCode) || isempty(sizeCode) || isempty(contrastCode) || isempty(stimDirCode)
+    if isempty(stimCode) || isempty(sizeCode) || ...
+            isempty(contrastCode) || isempty(stimDirCode)
         error('Could not map condition ID %d to summary label.', condID);
     end
 
@@ -957,15 +1111,19 @@ for ii = 1:numel(condition_list)
     entries(ii).conditionId = condID;
     entries(ii).stimName = char(currStim);
     entries(ii).stimCode = stimCode;
+
     entries(ii).sizeValue = currSize;
     entries(ii).sizeCode = sizeCode;
     entries(ii).sizeLabel = ternary_labelLocal(sizeCode, 'small', 'large');
+
     entries(ii).contrastValue = currContrast;
     entries(ii).contrastCode = contrastCode;
     entries(ii).contrastLabel = ternary_labelLocal(contrastCode, 'low', 'high');
+
     entries(ii).stimDirValue = currDir;
     entries(ii).stimDirCode = stimDirCode;
     entries(ii).stimDirLabel = stimDirLabels{stimDirCode};
+
     entries(ii).panelCondIndex = panelCondIndex;
     entries(ii).panelCondLabel = condLabels{panelCondIndex};
     entries(ii).panelCondShortLabel = condShortLabels{panelCondIndex};
@@ -985,8 +1143,8 @@ end
 function d = getConditionEffectiveDirCanonicalLocal(condEntry, condID)
 % Return canonical effective direction from one condition_full entry.
 %
-% This is an after-the-fact correction for model_data generated before
-% angle normalization was added upstream. It makes equivalent angles such as
+% This is an after-the-fact correction for model_data generated before angle
+% normalization was added upstream. It makes equivalent angles such as
 % 360/0 and -10/350 identical during downstream analysis.
 
 if nargin < 2
@@ -1003,12 +1161,14 @@ if currStim == "plaid"
     if ~isfield(condEntry, 'plaid_dir')
         error('condition_full(%d) missing field plaid_dir.', condID);
     end
+
     d = condEntry.plaid_dir;
 
 elseif currStim == "grating"
     if ~isfield(condEntry, 'grating_dir')
         error('condition_full(%d) missing field grating_dir.', condID);
     end
+
     d = condEntry.grating_dir;
 
 else
@@ -1016,20 +1176,20 @@ else
 end
 
 d = canonicalAngle360Local(d);
-
 end
 
 function a = canonicalAngle360Local(a)
 % Convert degree angles to canonical [0, 360).
 %
 % Examples:
-%   360  -> 0
-%   -10  -> 350
-%   720  -> 0
+%   360 -> 0
+%   -10 -> 350
+%   720 -> 0
 %
 % NaN remains NaN.
 
 a = double(a);
+
 finiteMask = isfinite(a);
 
 a(finiteMask) = mod(a(finiteMask), 360);
@@ -1041,7 +1201,6 @@ a(nearInteger) = round(a(nearInteger));
 
 a(finiteMask & abs(a) < tol) = 0;
 a(finiteMask & abs(a - 360) < tol) = 0;
-
 end
 
 function out = ternary_labelLocal(code, label1, label2)
@@ -1085,6 +1244,7 @@ xi = xi(:);
 
 % Interpolate density at each observed point.
 densityAtVals = interp1(xi, f, vals, 'linear', 'extrap');
+
 densityAtVals(~isfinite(densityAtVals)) = 0;
 densityAtVals(densityAtVals < 0) = 0;
 
