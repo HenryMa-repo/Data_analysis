@@ -14,7 +14,7 @@ The code supports an end-to-end analysis pipeline:
 4. Bin spike trains and generate count, firing-rate, z-scored, and demeaned data formats.
 5. Merge probe-specific data into DLAG-ready `model_data_allruns.mat`.
 6. Train DLAG models in pooled all-condition mode or condition-specific mode.
-7. Analyze fitted DLAG models, latent structure, reconstruction quality, size effects, and subspace geometry.
+7. Analyze fitted DLAG models, latent structure, reconstruction quality, size effects, contrast effects, subspace geometry, and cross-session summaries.
 
 The current workflow is designed for SpikeGLX / CatGT / Kilosort / Phy style outputs, Expo stimulus files, and MATLAB-based DLAG model fitting.
 
@@ -47,12 +47,20 @@ Data_analysis/
         ├── Latents_compare.m
         ├── Anova_latents_for_all_conds_used_dlag.m
         ├── RF_analysis.m
-        ├── plot_size_effect.m
-        ├── size_effect_comparation.m
         ├── pick_latents_by_svexp.m
+        ├── plotCSVEvsDim.m
         ├── subspace_similarity_dlag.m
+        │
         ├── data_reconstruction.m
         ├── calculate_pooled_conditions_R2.m
         ├── plot_reconstruction_R2.m
         ├── reconstruction_visualization.m
-        └── plotCSVEvsDim.m
+        │
+        ├── plot_size_effect.m
+        ├── size_effect_comparation.m
+        ├── plot_contrast_effect.m
+        ├── contrast_effect_comparation.m
+        │
+        ├── sum_session_effect_comparison.m
+        └── sum_sessions_latent_compare.m
+```
