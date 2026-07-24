@@ -79,8 +79,6 @@
 clc;
 clear;
 
-addpath(genpath(fullfile('.', 'expo_tools')));
-addpath(genpath(fullfile('.', 'utils')));
 
 %% ----------------------- User parameters -----------------------
 
