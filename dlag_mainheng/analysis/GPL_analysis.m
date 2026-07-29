@@ -11,11 +11,12 @@
 % 3. Keep only target-selected units that also exist in the GPL run.
 % 4. Average raw_fr across bins to obtain one mean firing rate per trial.
 % 5. Compute grating and plaid direction tuning curves (mean, SD, SEM).
-% 6. Compute grating DI and vector-based OSI without baseline subtraction.
-% 7. Build pattern and component predictions for the plaid tuning curve.
-% 8. Compute ordinary correlations, partial correlations, Fisher Z values,
+% 6. Optionally load a matching spontaneous/baseline data file.
+% 7. Compute grating DI and vector-based OSI, with optional baseline subtraction.
+% 8. Build pattern and component predictions for the plaid tuning curve.
+% 9. Compute ordinary correlations, partial correlations, Fisher Z values,
 %    pattern index PI = Zp - Zc, and pattern/component classification.
-% 9. Save unit_gpl_results.mat and all figures as both PNG and FIG files.
+% 10. Save numerical results and all figures as both PNG and FIG files.
 %
 % Stimulus-design handling:
 % - The number and spacing of grating/plaid directions are read from data.
@@ -41,12 +42,16 @@
 % - Group1/Group2_Pattern_component_analysis.png and .fig
 %
 % Notes:
-% 1. This version does not use or subtract spontaneous firing rate.
+% 1. Spontaneous subtraction is optional. The baseline file is selected by
+%    stim_tag, analysis_window, and bin_size through baseline_data_index.mat.
 % 2. raw_fr is unit x trial x bin. The trial response is the mean raw_fr
 %    across bins, which is the average firing rate across the full window.
 % 3. SD and SEM are always both saved. error_method only controls the
 %    shaded error band in the tuning figures and the tuning filenames.
-% 4. Probe/group mapping follows the order below:
+% 4. In spontaneous-subtracted mode, DI values above 1.6 are grouped into
+%    one overflow bar labeled >1.6 in the distribution figure.
+% 5. DI and OSI distribution panels show both mean and median.
+% 6. Probe/group mapping follows the order below:
 %       probe 0 -> Group1
 %       probe 1 -> Group2
 % =========================================================================
@@ -64,6 +69,16 @@ probe_group_names = {'Group1', 'Group2'};  % same order as probes
 
 % GPL run used for grating/plaid tuning and pattern/component analysis.
 gpl_stim_tag = '[dir12_gpl_2_200isi_fixedphase]';
+
+% Whether DI, OSI, and the component predictor use spontaneous/baseline
+% firing rates. Raw grating/plaid tuning figures remain on the raw FR scale.
+subtract_spontaneous = true;
+
+% Requested baseline version. The program requires one unique index entry
+% matching gpl_stim_tag, this window, and this bin size.
+baseline_analysis_window = [-0.1 0];
+baseline_bin_size = 0.1;
+baseline_index_filename = 'baseline_data_index.mat';
 
 % Separate run used only to define the neuron whitelist.
 target_stim_tag = '_2[Gpl2_2c_2sz_400_2_200isi]';
@@ -112,6 +127,35 @@ if ~isscalar(distribution_bar_width) || ...
     error('distribution_bar_width must be a finite scalar in (0, 1).');
 end
 
+if ~islogical(subtract_spontaneous) || ~isscalar(subtract_spontaneous)
+    error('subtract_spontaneous must be one logical scalar.');
+end
+
+if subtract_spontaneous
+    baseline_analysis_window = double(baseline_analysis_window(:)');
+    baseline_bin_size = double(baseline_bin_size);
+
+    if numel(baseline_analysis_window) ~= 2 || ...
+            any(~isfinite(baseline_analysis_window)) || ...
+            baseline_analysis_window(2) <= baseline_analysis_window(1)
+        error(['baseline_analysis_window must be [start end] with two ' ...
+            'finite values and end > start.']);
+    end
+
+    if baseline_analysis_window(2) > 0
+        error('baseline_analysis_window must end at or before time zero.');
+    end
+
+    if ~isscalar(baseline_bin_size) || ...
+            ~isfinite(baseline_bin_size) || baseline_bin_size <= 0
+        error('baseline_bin_size must be a positive finite scalar.');
+    end
+
+    if isempty(baseline_index_filename)
+        error('baseline_index_filename cannot be empty.');
+    end
+end
+
 if ~any(strcmp(lower(char(figure_visibility)), {'on', 'off'}))
     error('figure_visibility must be ''on'' or ''off''.');
 end
@@ -131,6 +175,13 @@ fprintf('GPL stim tag   : %s\n', gpl_stim_tag);
 fprintf('Target stim tag: %s\n', target_stim_tag);
 fprintf('Model data file: %s\n', dat_file);
 fprintf('Error method   : %s\n', error_method);
+fprintf('Spon subtract  : %d\n', subtract_spontaneous);
+
+if subtract_spontaneous
+    fprintf('Baseline window: [%g %g] s\n', ...
+        baseline_analysis_window(1), baseline_analysis_window(2));
+    fprintf('Baseline bin   : %g s\n', baseline_bin_size);
+end
 
 %% ----------------------- Load target-selected unit IDs -----------------------
 if ~isfile(dat_file)
@@ -210,6 +261,20 @@ for ip = 1:numel(probes)
                 bined_data_allruns, gpl_stim_tag, 'bined_data_allruns');
             gpl_data = bined_data_allruns{gpl_run_idx};
 
+            %% ----------------------- Load requested baseline version -----------------------
+            if subtract_spontaneous
+                [baseline_data, baseline_source] = ...
+                    load_matching_baseline_data( ...
+                    ksDir, ...
+                    baseline_index_filename, ...
+                    gpl_stim_tag, ...
+                    baseline_analysis_window, ...
+                    baseline_bin_size);
+            else
+                baseline_data = [];
+                baseline_source = struct();
+            end
+
             %% ----------------------- Compute all GPL results -----------------------
             gpl_results = compute_gpl_results( ...
                 gpl_data, ...
@@ -225,18 +290,38 @@ for ip = 1:numel(probes)
                 target_stim_tag, ...
                 error_method, ...
                 pattern_z_threshold, ...
-                distribution_bar_width);
+                distribution_bar_width, ...
+                subtract_spontaneous, ...
+                baseline_data, ...
+                baseline_source);
 
             %% ----------------------- Build output filenames -----------------------
+            if subtract_spontaneous
+                output_suffix = '_sponsub';
+            else
+                output_suffix = '';
+            end
+
+            output_mat_name = append_suffix_before_extension( ...
+                gpl_mat_name, output_suffix);
+
+            % Tuning figures always show raw firing-rate tuning, so their
+            % filenames are shared by raw and spontaneous-subtracted modes.
             base_grating = sprintf('%s_Grating_tuning_%s', ...
                 group_name, error_method);
             base_plaid = sprintf('%s_Plaid_tuning_%s', ...
                 group_name, error_method);
-            base_selectivity = sprintf('%s_DI_OSI_distribution', group_name);
-            base_pattern = sprintf('%s_Pattern_component_analysis', group_name);
 
+            % Selectivity and pattern/component results change with baseline
+            % subtraction, so these names receive _sponsub when enabled.
+            base_selectivity = sprintf('%s_DI_OSI_distribution%s', ...
+                group_name, output_suffix);
+            base_pattern = sprintf('%s_Pattern_component_analysis%s', ...
+                group_name, output_suffix);
+
+            gpl_results.output_suffix = output_suffix;
             gpl_results.files = struct();
-            gpl_results.files.mat = fullfile(ksDir, gpl_mat_name);
+            gpl_results.files.mat = fullfile(ksDir, output_mat_name);
 
             gpl_results.files.grating_png = fullfile(ksDir, ...
                 [base_grating '.png']);
@@ -297,7 +382,8 @@ for ip = 1:numel(probes)
                 selectivity_bin_edges, ...
                 distribution_bar_width, ...
                 group_name, ...
-                figure_visibility);
+                figure_visibility, ...
+                subtract_spontaneous);
 
             save_figure_pair(fig, ...
                 gpl_results.files.selectivity_png, ...
@@ -418,7 +504,8 @@ function gpl_results = compute_gpl_results( ...
         probe_id, group_name, ksDir, dat_file, ...
         target_run_idx, gpl_run_idx, ...
         gpl_stim_tag, target_stim_tag, error_method, ...
-        pattern_z_threshold, distribution_bar_width)
+        pattern_z_threshold, distribution_bar_width, ...
+        subtract_spontaneous, baseline_data, baseline_source)
 % Compute tuning, selectivity, and pattern/component metrics for one probe.
 
     validate_gpl_bined_data(gpl_data);
@@ -450,15 +537,9 @@ function gpl_results = compute_gpl_results( ...
     raw_fr_all = double(gpl_data.raw_fr);
     nTrial = size(raw_fr_all, 2);
 
-    if ismatrix(raw_fr_all)
-        selected_raw_fr_bin = raw_fr_all(gpl_unit_index, :);
-        response_fr_trial = selected_raw_fr_bin;
-    else
-        selected_raw_fr_bin = raw_fr_all(gpl_unit_index, :, :);
-        response_fr_trial = mean(selected_raw_fr_bin, 3, 'omitnan');
-        response_fr_trial = reshape(response_fr_trial, ...
-            [numel(used_unit_ids), nTrial]);
-    end
+    [selected_raw_fr_bin, response_fr_trial] = ...
+        select_and_average_raw_fr( ...
+        raw_fr_all, gpl_unit_index, nTrial, 'GPL stimulus raw_fr');
 
     % Trial-wise stimulus identity reconstructed from conditions.
     [stim_name_trial, grating_dir_trial, plaid_dir_trial, ...
@@ -496,6 +577,7 @@ function gpl_results = compute_gpl_results( ...
         detect_plaid_component_separation( ...
         dir1_trial, dir2_trial, is_plaid);
 
+    % Raw stimulus-period tuning curves.
     [g_mean, g_sd, g_sem, g_n_trials, g_n_valid_trials] = ...
         compute_direction_tuning( ...
         response_fr_trial, grating_dir_trial, is_grating, ...
@@ -506,16 +588,86 @@ function gpl_results = compute_gpl_results( ...
         response_fr_trial, plaid_dir_trial, is_plaid, ...
         plaid_directions);
 
-    % DI and OSI are computed from the grating mean tuning curve.
-    grating_selectivity = compute_grating_selectivity( ...
-        g_mean, grating_directions);
+    % Optional baseline alignment and baseline-subtracted trial responses.
+    if subtract_spontaneous
+        baseline = prepare_baseline_for_gpl( ...
+            baseline_data, baseline_source, gpl_data, used_unit_ids, ...
+            stim_name_trial, grating_dir_trial, plaid_dir_trial, ...
+            dir1_trial, dir2_trial, nTrial);
 
-    % Build plaid pattern/component predictors and associated statistics.
+        baseline_fr_trial = baseline.response_fr_trial;
+        response_fr_trial_sponsub = response_fr_trial - baseline_fr_trial;
+
+        [g_baseline_mean, g_baseline_sd, g_baseline_sem, ...
+            g_baseline_n_trials, g_baseline_n_valid_trials] = ...
+            compute_direction_tuning( ...
+            baseline_fr_trial, grating_dir_trial, is_grating, ...
+            grating_directions);
+
+        [p_baseline_mean, p_baseline_sd, p_baseline_sem, ...
+            p_baseline_n_trials, p_baseline_n_valid_trials] = ...
+            compute_direction_tuning( ...
+            baseline_fr_trial, plaid_dir_trial, is_plaid, ...
+            plaid_directions);
+
+        [g_sponsub_mean, g_sponsub_sd, g_sponsub_sem, ...
+            g_sponsub_n_trials, g_sponsub_n_valid_trials] = ...
+            compute_direction_tuning( ...
+            response_fr_trial_sponsub, ...
+            grating_dir_trial, is_grating, grating_directions);
+
+        [p_sponsub_mean, p_sponsub_sd, p_sponsub_sem, ...
+            p_sponsub_n_trials, p_sponsub_n_valid_trials] = ...
+            compute_direction_tuning( ...
+            response_fr_trial_sponsub, ...
+            plaid_dir_trial, is_plaid, plaid_directions);
+
+        selectivity_mean_fr = g_sponsub_mean;
+    else
+        baseline = struct();
+        baseline_fr_trial = [];
+        response_fr_trial_sponsub = [];
+
+        g_baseline_mean = [];
+        g_baseline_sd = [];
+        g_baseline_sem = [];
+        g_baseline_n_trials = [];
+        g_baseline_n_valid_trials = [];
+
+        p_baseline_mean = [];
+        p_baseline_sd = [];
+        p_baseline_sem = [];
+        p_baseline_n_trials = [];
+        p_baseline_n_valid_trials = [];
+
+        g_sponsub_mean = [];
+        g_sponsub_sd = [];
+        g_sponsub_sem = [];
+        g_sponsub_n_trials = [];
+        g_sponsub_n_valid_trials = [];
+
+        p_sponsub_mean = [];
+        p_sponsub_sd = [];
+        p_sponsub_sem = [];
+        p_sponsub_n_trials = [];
+        p_sponsub_n_valid_trials = [];
+
+        selectivity_mean_fr = g_mean;
+    end
+
+    % DI preferred direction and OSI are based on selectivity_mean_fr.
+    % In spontaneous-subtracted mode this is G(theta)-B(theta).
+    grating_selectivity = compute_grating_selectivity( ...
+        selectivity_mean_fr, grating_directions, subtract_spontaneous);
+
+    % D and P remain raw. Only C uses baseline when requested.
     plaid_analysis = compute_pattern_component_analysis( ...
         g_mean, grating_directions, ...
         p_mean, plaid_directions, ...
         plaid_component_separation_deg, ...
-        pattern_z_threshold);
+        pattern_z_threshold, ...
+        subtract_spontaneous, ...
+        g_baseline_mean);
 
     nUsed = numel(used_unit_ids);
     unit_depth_um_all = get_optional_unit_vector( ...
@@ -552,7 +704,7 @@ function gpl_results = compute_gpl_results( ...
     gpl_results.plaid_component_separation_deg = ...
         plaid_component_separation_deg;
     gpl_results.pattern_z_threshold = pattern_z_threshold;
-    gpl_results.baseline_subtracted = false;
+    gpl_results.baseline_subtracted = logical(subtract_spontaneous);
 
     % Unit identity and cross-run alignment.
     gpl_results.target_unit_ids = target_unit_ids(:);
@@ -565,9 +717,10 @@ function gpl_results = compute_gpl_results( ...
     gpl_results.unit_depth_um = unit_depth_um(:);
     gpl_results.unit_channel = unit_channel(:);
 
-    % Trial-level data after target-unit filtering.
+    % Trial-level stimulus-period data after target-unit filtering.
     gpl_results.raw_fr_bin = selected_raw_fr_bin;
     gpl_results.response_fr_trial = response_fr_trial;
+    gpl_results.response_fr_trial_sponsub = response_fr_trial_sponsub;
     gpl_results.condition_index_per_trial = ...
         double(gpl_data.condition_index_per_trial(:));
     gpl_results.conditions = gpl_data.conditions;
@@ -581,6 +734,12 @@ function gpl_results = compute_gpl_results( ...
     gpl_results.is_grating_trial = is_grating;
     gpl_results.is_plaid_trial = is_plaid;
 
+    % Baseline source, alignment, and trial-level data.
+    gpl_results.baseline = baseline;
+    if subtract_spontaneous
+        gpl_results.baseline.response_fr_trial = baseline_fr_trial;
+    end
+
     % Grating results.
     gpl_results.grating = struct();
     gpl_results.grating.directions = grating_directions;
@@ -589,6 +748,23 @@ function gpl_results = compute_gpl_results( ...
     gpl_results.grating.sem_fr = g_sem;
     gpl_results.grating.n_trials = g_n_trials;
     gpl_results.grating.n_valid_trials = g_n_valid_trials;
+
+    gpl_results.grating.baseline_mean_fr = g_baseline_mean;
+    gpl_results.grating.baseline_sd_fr = g_baseline_sd;
+    gpl_results.grating.baseline_sem_fr = g_baseline_sem;
+    gpl_results.grating.baseline_n_trials = g_baseline_n_trials;
+    gpl_results.grating.baseline_n_valid_trials = ...
+        g_baseline_n_valid_trials;
+
+    gpl_results.grating.sponsub_mean_fr = g_sponsub_mean;
+    gpl_results.grating.sponsub_sd_fr = g_sponsub_sd;
+    gpl_results.grating.sponsub_sem_fr = g_sponsub_sem;
+    gpl_results.grating.sponsub_n_trials = g_sponsub_n_trials;
+    gpl_results.grating.sponsub_n_valid_trials = ...
+        g_sponsub_n_valid_trials;
+    gpl_results.grating.selectivity_input_mean_fr = selectivity_mean_fr;
+    gpl_results.grating.selectivity_input_is_sponsub = ...
+        logical(subtract_spontaneous);
 
     selectivity_fields = fieldnames(grating_selectivity);
     for k = 1:numel(selectivity_fields)
@@ -605,6 +781,20 @@ function gpl_results = compute_gpl_results( ...
     gpl_results.plaid.n_trials = p_n_trials;
     gpl_results.plaid.n_valid_trials = p_n_valid_trials;
 
+    gpl_results.plaid.baseline_mean_fr = p_baseline_mean;
+    gpl_results.plaid.baseline_sd_fr = p_baseline_sd;
+    gpl_results.plaid.baseline_sem_fr = p_baseline_sem;
+    gpl_results.plaid.baseline_n_trials = p_baseline_n_trials;
+    gpl_results.plaid.baseline_n_valid_trials = ...
+        p_baseline_n_valid_trials;
+
+    gpl_results.plaid.sponsub_mean_fr = p_sponsub_mean;
+    gpl_results.plaid.sponsub_sd_fr = p_sponsub_sd;
+    gpl_results.plaid.sponsub_sem_fr = p_sponsub_sem;
+    gpl_results.plaid.sponsub_n_trials = p_sponsub_n_trials;
+    gpl_results.plaid.sponsub_n_valid_trials = ...
+        p_sponsub_n_valid_trials;
+
     plaid_fields = fieldnames(plaid_analysis);
     for k = 1:numel(plaid_fields)
         f = plaid_fields{k};
@@ -614,6 +804,388 @@ function gpl_results = compute_gpl_results( ...
     gpl_results.plot = struct();
     gpl_results.plot.depth_desc_order = depth_desc_order(:);
     gpl_results.plot.distribution_bar_width = distribution_bar_width;
+    gpl_results.plot.sponsub_DI_regular_max = 1.6;
+end
+
+function [baseline_data, source] = load_matching_baseline_data( ...
+        ksDir, index_filename, stim_tag, requested_window, requested_bin_size)
+% Select one baseline file by stim_tag, analysis_window, and bin_size.
+
+    index_file = fullfile(ksDir, index_filename);
+    if ~isfile(index_file)
+        error('Missing baseline index file: %s', index_file);
+    end
+
+    S = load(index_file, 'baseline_data_index');
+    if ~isfield(S, 'baseline_data_index') || ...
+            ~isstruct(S.baseline_data_index)
+        error(['baseline_data_index is missing or invalid in baseline ' ...
+            'index file: %s'], index_file);
+    end
+
+    baseline_data_index = S.baseline_data_index;
+    required_fields = {'stim_tag', 'analysis_window', 'bin_size', 'filename'};
+
+    for f = 1:numel(required_fields)
+        if ~isfield(baseline_data_index, required_fields{f})
+            error('baseline_data_index is missing field %s in %s.', ...
+                required_fields{f}, index_file);
+        end
+    end
+
+    match = false(1, numel(baseline_data_index));
+
+    for k = 1:numel(baseline_data_index)
+        same_tag = strcmp( ...
+            char(string(baseline_data_index(k).stim_tag)), stim_tag);
+
+        same_window = same_numeric_vector_local( ...
+            baseline_data_index(k).analysis_window, requested_window);
+
+        same_bin = numeric_scalar_equal_local( ...
+            baseline_data_index(k).bin_size, requested_bin_size);
+
+        match(k) = same_tag && same_window && same_bin;
+    end
+
+    if ~any(match)
+        error(['No baseline index entry matches the requested GPL baseline.\n' ...
+            'stim_tag: %s\nanalysis_window: [%g %g]\nbin_size: %g\n' ...
+            'Index file: %s'], ...
+            stim_tag, requested_window(1), requested_window(2), ...
+            requested_bin_size, index_file);
+    end
+
+    if sum(match) > 1
+        error(['Multiple baseline index entries match stim_tag %s, window ' ...
+            '[%g %g], and bin_size %g in %s.'], ...
+            stim_tag, requested_window(1), requested_window(2), ...
+            requested_bin_size, index_file);
+    end
+
+    entry_index = find(match, 1);
+    entry = baseline_data_index(entry_index);
+    stored_filename = char(string(entry.filename));
+
+    if isfile(stored_filename)
+        baseline_file = stored_filename;
+    else
+        baseline_file = fullfile(ksDir, stored_filename);
+    end
+
+    if ~isfile(baseline_file)
+        error('Baseline data file referenced by the index is missing: %s', ...
+            baseline_file);
+    end
+
+    B = load(baseline_file, 'baseline_data');
+    if ~isfield(B, 'baseline_data') || ~isstruct(B.baseline_data)
+        error('baseline_data is missing or invalid in %s.', baseline_file);
+    end
+
+    baseline_data = B.baseline_data;
+
+    validate_loaded_baseline_identity( ...
+        baseline_data, stim_tag, requested_window, requested_bin_size, ...
+        baseline_file);
+
+    source = struct();
+    source.index_file = index_file;
+    source.data_file = baseline_file;
+    source.index_entry_number = entry_index;
+    source.index_entry = entry;
+    source.requested_stim_tag = stim_tag;
+    source.requested_analysis_window = double(requested_window(:)');
+    source.requested_bin_size = double(requested_bin_size);
+end
+
+function validate_loaded_baseline_identity( ...
+        baseline_data, stim_tag, requested_window, requested_bin_size, ...
+        baseline_file)
+% Recheck the baseline file itself rather than trusting only the index.
+
+    required_fields = {'stim_tag', 'analysis_window', 'bin_size'};
+
+    for k = 1:numel(required_fields)
+        if ~isfield(baseline_data, required_fields{k})
+            error('Baseline file %s is missing field %s.', ...
+                baseline_file, required_fields{k});
+        end
+    end
+
+    if ~strcmp(char(string(baseline_data.stim_tag)), stim_tag)
+        error(['Baseline stim_tag in file does not match the request.\n' ...
+            'File: %s\nExpected: %s\nFound: %s'], ...
+            baseline_file, stim_tag, char(string(baseline_data.stim_tag)));
+    end
+
+    if ~same_numeric_vector_local( ...
+            baseline_data.analysis_window, requested_window)
+        error(['Baseline analysis_window in file does not match the request. ' ...
+            'File: %s'], baseline_file);
+    end
+
+    if ~numeric_scalar_equal_local( ...
+            baseline_data.bin_size, requested_bin_size)
+        error(['Baseline bin_size in file does not match the request. ' ...
+            'File: %s'], baseline_file);
+    end
+end
+
+function baseline = prepare_baseline_for_gpl( ...
+        baseline_data, baseline_source, gpl_data, used_unit_ids, ...
+        stim_name_trial, grating_dir_trial, plaid_dir_trial, ...
+        dir1_trial, dir2_trial, nTrial)
+% Validate and align one baseline file to the selected GPL units and trials.
+
+    required_fields = { ...
+        'stim_tag', ...
+        'unit_ids', ...
+        'analysis_window', ...
+        'bin_size', ...
+        'condition_index_per_trial', ...
+        'conditions', ...
+        'raw_fr'};
+
+    for k = 1:numel(required_fields)
+        if ~isfield(baseline_data, required_fields{k})
+            error('Loaded baseline_data is missing field %s.', ...
+                required_fields{k});
+        end
+    end
+
+    if ~strcmp(char(string(baseline_data.stim_tag)), ...
+            char(string(gpl_data.stim_tag)))
+        error('Baseline and GPL stimulus tags do not match.');
+    end
+
+    baseline_condition_index = ...
+        double(baseline_data.condition_index_per_trial(:));
+
+    gpl_condition_index = ...
+        double(gpl_data.condition_index_per_trial(:));
+
+    if numel(baseline_condition_index) ~= nTrial
+        error(['Baseline trial count from condition_index_per_trial (%d) ' ...
+            'does not match GPL trial count (%d).'], ...
+            numel(baseline_condition_index), nTrial);
+    end
+
+    same_condition_index = same_value_vector_local( ...
+        baseline_condition_index, gpl_condition_index);
+
+    if ~all(same_condition_index)
+        mismatch = find(~same_condition_index, 1);
+        error(['Baseline and GPL condition_index_per_trial differ. ' ...
+            'First mismatch is trial %d.'], mismatch);
+    end
+
+    [base_stim_name, base_grating_dir, base_plaid_dir, ...
+        base_dir1, base_dir2] = ...
+        get_gpl_trial_information( ...
+        baseline_data.conditions, ...
+        baseline_condition_index, ...
+        nTrial);
+
+    assert_same_trial_text( ...
+        base_stim_name, stim_name_trial, 'stim_name');
+    assert_same_trial_angles( ...
+        base_grating_dir, grating_dir_trial, 'grating_dir');
+    assert_same_trial_angles( ...
+        base_plaid_dir, plaid_dir_trial, 'plaid_dir');
+    assert_same_trial_angles( ...
+        base_dir1, dir1_trial, 'dir1');
+    assert_same_trial_angles( ...
+        base_dir2, dir2_trial, 'dir2');
+
+    baseline_all_unit_ids = double(baseline_data.unit_ids(:));
+
+    if numel(unique(baseline_all_unit_ids)) ~= ...
+            numel(baseline_all_unit_ids)
+        error('baseline_data.unit_ids contains duplicates.');
+    end
+
+    [found, baseline_unit_index] = ...
+        ismember(used_unit_ids, baseline_all_unit_ids);
+
+    if any(~found)
+        missing = used_unit_ids(~found);
+        error(['%d selected GPL units are missing from the baseline file. ' ...
+            'Example missing unit ID: %g'], ...
+            numel(missing), missing(1));
+    end
+
+    baseline_raw_fr_all = double(baseline_data.raw_fr);
+
+    if size(baseline_raw_fr_all, 1) ~= numel(baseline_all_unit_ids)
+        error(['First dimension of baseline raw_fr does not match the ' ...
+            'number of baseline unit IDs.']);
+    end
+
+    if size(baseline_raw_fr_all, 2) ~= nTrial
+        error(['Second dimension of baseline raw_fr (%d) does not match ' ...
+            'GPL trial count (%d).'], ...
+            size(baseline_raw_fr_all, 2), nTrial);
+    end
+
+    [selected_raw_fr_bin, response_fr_trial] = ...
+        select_and_average_raw_fr( ...
+        baseline_raw_fr_all, ...
+        baseline_unit_index, ...
+        nTrial, ...
+        'baseline raw_fr');
+
+    baseline = struct();
+    baseline.stim_tag = char(string(baseline_data.stim_tag));
+    baseline.analysis_window = ...
+        double(baseline_data.analysis_window(:)');
+    baseline.bin_size = double(baseline_data.bin_size);
+
+    baseline.index_file = baseline_source.index_file;
+    baseline.data_file = baseline_source.data_file;
+    baseline.index_entry_number = ...
+        baseline_source.index_entry_number;
+    baseline.index_entry = baseline_source.index_entry;
+
+    baseline.all_unit_ids = baseline_all_unit_ids;
+    baseline.unit_index = baseline_unit_index(:);
+    baseline.used_unit_ids = used_unit_ids(:);
+
+    baseline.raw_fr_bin = selected_raw_fr_bin;
+    baseline.response_fr_trial = response_fr_trial;
+
+    baseline.condition_index_per_trial = baseline_condition_index;
+    baseline.conditions = baseline_data.conditions;
+end
+
+function [selected_raw_fr_bin, response_fr_trial] = ...
+        select_and_average_raw_fr( ...
+        raw_fr_all, unit_index, nTrial, label_text)
+% Select unit rows and average equal-duration firing-rate bins per trial.
+
+    if ~(ismatrix(raw_fr_all) || ndims(raw_fr_all) == 3)
+        error('%s must be unit x trial or unit x trial x bin.', label_text);
+    end
+
+    if size(raw_fr_all, 2) ~= nTrial
+        error('%s trial dimension does not match nTrial.', label_text);
+    end
+
+    if ismatrix(raw_fr_all)
+        selected_raw_fr_bin = raw_fr_all(unit_index, :);
+        response_fr_trial = selected_raw_fr_bin;
+    else
+        selected_raw_fr_bin = raw_fr_all(unit_index, :, :);
+        response_fr_trial = mean(selected_raw_fr_bin, 3, 'omitnan');
+        response_fr_trial = reshape( ...
+            response_fr_trial, ...
+            [numel(unit_index), nTrial]);
+    end
+end
+
+function assert_same_trial_text(a, b, field_name)
+% Require identical trial-wise text labels, ignoring letter case.
+
+    a = string(a(:));
+    b = string(b(:));
+
+    if numel(a) ~= numel(b)
+        error('Trial-wise %s vectors have different lengths.', field_name);
+    end
+
+    same = strcmpi(strtrim(a), strtrim(b));
+
+    if any(~same)
+        idx = find(~same, 1);
+        error(['Baseline and GPL trial-wise %s differ at trial %d. ' ...
+            'Baseline: %s; GPL: %s'], ...
+            field_name, idx, char(a(idx)), char(b(idx)));
+    end
+end
+
+function assert_same_trial_angles(a, b, field_name)
+% Require identical trial-wise angles, treating paired NaNs as equal.
+
+    a = double(a(:));
+    b = double(b(:));
+
+    if numel(a) ~= numel(b)
+        error('Trial-wise %s vectors have different lengths.', field_name);
+    end
+
+    both_nan = isnan(a) & isnan(b);
+    both_finite_equal = angle_equal(a, b);
+    same = both_nan | both_finite_equal;
+
+    if any(~same)
+        idx = find(~same, 1);
+        error(['Baseline and GPL trial-wise %s differ at trial %d. ' ...
+            'Baseline: %.12g; GPL: %.12g'], ...
+            field_name, idx, a(idx), b(idx));
+    end
+end
+
+function tf = same_value_vector_local(a, b)
+% Element-wise equality helper used for mismatch localization.
+
+    a = double(a(:));
+    b = double(b(:));
+
+    if numel(a) ~= numel(b)
+        tf = false(max(numel(a), numel(b)), 1);
+        return;
+    end
+
+    tf = (a == b) | (isnan(a) & isnan(b));
+end
+
+function tf = same_numeric_vector_local(a, b)
+% Compare two finite numeric vectors with a small tolerance.
+
+    a = double(a(:));
+    b = double(b(:));
+
+    if numel(a) ~= numel(b)
+        tf = false;
+        return;
+    end
+
+    if isempty(a)
+        tf = true;
+        return;
+    end
+
+    if any(~isfinite(a)) || any(~isfinite(b))
+        tf = isequaln(a, b);
+        return;
+    end
+
+    tf = all(abs(a - b) <= 1e-12);
+end
+
+function tf = numeric_scalar_equal_local(a, b)
+% Compare two finite numeric scalars with a small tolerance.
+
+    tf = isnumeric(a) && isnumeric(b) && ...
+        isscalar(a) && isscalar(b) && ...
+        isfinite(a) && isfinite(b) && ...
+        abs(double(a) - double(b)) <= 1e-12;
+end
+
+function filename_out = ...
+        append_suffix_before_extension(filename_in, suffix)
+% Add a suffix immediately before a filename extension.
+
+    [folder_part, base_name, extension] = ...
+        fileparts(char(filename_in));
+
+    filename_only = [base_name char(suffix) extension];
+
+    if isempty(folder_part)
+        filename_out = filename_only;
+    else
+        filename_out = fullfile(folder_part, filename_only);
+    end
 end
 
 function validate_gpl_bined_data(gpl_data)
@@ -976,11 +1548,21 @@ function tf = angle_equal(a, b)
     tf = isfinite(a) & isfinite(b) & abs(delta) < tol;
 end
 
-function out = compute_grating_selectivity(mean_fr, directions)
-% Compute DI and vector-based OSI from the grating mean tuning curve.
+function out = compute_grating_selectivity( ...
+        mean_fr, directions, use_absolute_osi_denominator)
+% Compute DI and vector-based OSI from one grating mean tuning curve.
 %
-% DI  = 1 - Rnull/Ropt, with no baseline subtraction.
-% OSI = |sum R(theta) exp(i*2*theta)| / sum R(theta).
+% In raw mode:
+%   DI  = 1 - Rnull/Ropt
+%   OSI = |sum R(theta) exp(i*2*theta)| / sum R(theta)
+%
+% In spontaneous-subtracted mode, mean_fr is G(theta)-B(theta):
+%   preferred direction is selected from G-B;
+%   DI is valid only when Ropt > 0;
+%   OSI denominator is sum(abs(G-B)).
+%
+% OSI is calculated directly from all measured directions. Opposite
+% directions are not explicitly averaged or merged before the vector sum.
 %
 % DI never uses interpolation. Every measured grating direction must have
 % an exactly measured direction 180 degrees away; otherwise this function
@@ -993,8 +1575,12 @@ function out = compute_grating_selectivity(mean_fr, directions)
         error('Direction count does not match grating tuning columns.');
     end
 
+    use_absolute_osi_denominator = ...
+        logical(use_absolute_osi_denominator);
+
     % Precompute and strictly validate the opposite-direction mapping.
     opposite_index = nan(1, nDir);
+
     for d = 1:nDir
         required_null_dir = mod(directions(d) + 180, 360);
         idx = find(angle_equal(directions, required_null_dir));
@@ -1005,6 +1591,7 @@ function out = compute_grating_selectivity(mean_fr, directions)
                 'Interpolation is disabled.'], ...
                 directions(d), required_null_dir);
         end
+
         if numel(idx) > 1
             error(['Cannot calculate DI because opposite direction %.12g deg ' ...
                 'matches multiple grating-direction columns.'], ...
@@ -1016,97 +1603,148 @@ function out = compute_grating_selectivity(mean_fr, directions)
 
     preferred_direction = nan(nUnit, 1);
     null_direction = nan(nUnit, 1);
+
     preferred_direction_index = nan(nUnit, 1);
     null_direction_index = nan(nUnit, 1);
+
     Ropt_fr = nan(nUnit, 1);
     Rnull_fr = nan(nUnit, 1);
+
     DI = nan(nUnit, 1);
     DI_valid = false(nUnit, 1);
+    DI_excluded_nonpositive_opt = false(nUnit, 1);
 
     OSI = nan(nUnit, 1);
     preferred_orientation = nan(nUnit, 1);
-    orientation_vector = complex(nan(nUnit, 1), nan(nUnit, 1));
+
+    orientation_vector = ...
+        complex(nan(nUnit, 1), nan(nUnit, 1));
+
+    OSI_denominator = nan(nUnit, 1);
     OSI_valid = false(nUnit, 1);
 
     for u = 1:nUnit
         R = mean_fr(u, :);
         finite_mask = isfinite(R) & isfinite(directions);
 
-        % ----------------------- Direction index -----------------------
+        %% Direction index
         if any(finite_mask)
             finite_idx = find(finite_mask);
+
             [rmax, local_idx] = max(R(finite_mask));
             pref_idx = finite_idx(local_idx);  % first maximum if tied
             null_idx = opposite_index(pref_idx);
 
             preferred_direction(u) = directions(pref_idx);
             null_direction(u) = directions(null_idx);
+
             preferred_direction_index(u) = pref_idx;
             null_direction_index(u) = null_idx;
+
             Ropt_fr(u) = rmax;
 
             if isfinite(R(null_idx))
                 Rnull_fr(u) = R(null_idx);
             end
 
-            % DI is undefined only when the maximal measured response is
-            % nonpositive or the neuron's null response is nonfinite.
-            if isfinite(rmax) && rmax > 0 && isfinite(R(null_idx))
+            if isfinite(rmax) && ...
+                    rmax > 0 && ...
+                    isfinite(R(null_idx))
+
                 DI(u) = 1 - R(null_idx) / rmax;
                 DI_valid(u) = true;
+
+            elseif isfinite(rmax) && rmax <= 0
+
+                DI_excluded_nonpositive_opt(u) = true;
             end
         end
 
-        % ----------------------- Orientation selectivity index -----------------------
+        %% Orientation selectivity index
         if any(finite_mask)
             Ruse = R(finite_mask);
             theta = directions(finite_mask);
-            denominator = sum(Ruse);
+
+            if use_absolute_osi_denominator
+                denominator = sum(abs(Ruse));
+            else
+                denominator = sum(Ruse);
+            end
+
+            OSI_denominator(u) = denominator;
 
             if isfinite(denominator) && denominator > 0
-                vec = sum(Ruse .* exp(1i * 2 * deg2rad(theta)));
+                vec = sum( ...
+                    Ruse .* exp(1i * 2 * deg2rad(theta)));
+
                 OSI(u) = abs(vec) / denominator;
                 orientation_vector(u) = vec;
                 OSI_valid(u) = true;
 
                 if abs(vec) > 0
-                    preferred_orientation(u) = mod( ...
-                        rad2deg(angle(vec)) / 2, 180);
+                    preferred_orientation(u) = ...
+                        mod(rad2deg(angle(vec)) / 2, 180);
                 end
             end
         end
     end
 
+    DI_finite = DI(isfinite(DI));
+    OSI_finite = OSI(isfinite(OSI));
+
     out = struct();
+
     out.preferred_direction = preferred_direction;
     out.null_direction = null_direction;
     out.preferred_direction_index = preferred_direction_index;
     out.null_direction_index = null_direction_index;
     out.opposite_direction_index = opposite_index;
+
     out.Ropt_fr = Ropt_fr;
     out.Rnull_fr = Rnull_fr;
+
     out.DI = DI;
     out.DI_valid = DI_valid;
+    out.DI_excluded_nonpositive_opt = ...
+        DI_excluded_nonpositive_opt;
+    out.DI_mean = mean(DI_finite, 'omitnan');
+    out.DI_median = median(DI_finite, 'omitnan');
+    out.DI_n_valid = numel(DI_finite);
+    out.DI_n_above_1p6 = sum(DI_finite > 1.6);
 
     out.preferred_orientation = preferred_orientation;
     out.orientation_vector = orientation_vector;
+    out.OSI_denominator = OSI_denominator;
+
+    out.OSI_denominator_uses_absolute_response = ...
+        use_absolute_osi_denominator;
+
     out.OSI = OSI;
     out.OSI_valid = OSI_valid;
+    out.OSI_mean = mean(OSI_finite, 'omitnan');
+    out.OSI_median = median(OSI_finite, 'omitnan');
+    out.OSI_n_valid = numel(OSI_finite);
 end
 
 function out = compute_pattern_component_analysis( ...
         grating_mean_fr, grating_directions, ...
         plaid_mean_fr, plaid_directions, ...
-        component_separation_deg, z_threshold)
+        component_separation_deg, z_threshold, ...
+        subtract_spontaneous, grating_baseline_mean_fr)
 % Build pattern/component predictors and compute correlation-based metrics.
 %
-% Pattern prediction:
-%   P(theta) = G(theta)
+% The actual plaid response and pattern prediction remain raw:
+%   D(theta) = measured raw plaid firing rate
+%   P(theta) = raw G(theta)
 %
-% Component prediction for component separation alpha:
-%   C(theta) = G(theta - alpha/2) + G(theta + alpha/2)
+% Without baseline subtraction:
+%   C(theta) = G1 + G2
 %
-% No spontaneous-rate subtraction is used in this version.
+% With baseline subtraction:
+%   C(theta) = (G1-B1) + (G2-B2) + (B1+B2)/2
+%            = G1 + G2 - (B1+B2)/2
+%
+% No interpolation is used.
 
     [nUnit, nGdir] = size(grating_mean_fr);
     [nUnitP, nPdir] = size(plaid_mean_fr);
@@ -1121,23 +1759,50 @@ function out = compute_pattern_component_analysis( ...
     if numel(grating_directions) ~= nGdir
         error('grating_directions does not match grating tuning columns.');
     end
+
     if numel(plaid_directions) ~= nPdir
         error('plaid_directions does not match plaid tuning columns.');
     end
 
+    subtract_spontaneous = logical(subtract_spontaneous);
+
+    if subtract_spontaneous
+        if ~isequal(size(grating_baseline_mean_fr), size(grating_mean_fr))
+            error(['grating_baseline_mean_fr must match grating_mean_fr ' ...
+                'when spontaneous subtraction is enabled.']);
+        end
+    end
+
     if ~isscalar(component_separation_deg) || ...
             ~isfinite(component_separation_deg) || ...
-            component_separation_deg <= 0 || component_separation_deg >= 180
+            component_separation_deg <= 0 || ...
+            component_separation_deg >= 180
+
         error(['component_separation_deg must be a finite scalar strictly ' ...
             'between 0 and 180 degrees.']);
     end
 
     half_sep = component_separation_deg / 2;
-    component_direction_1 = mod(plaid_directions - half_sep, 360);
-    component_direction_2 = mod(plaid_directions + half_sep, 360);
+
+    component_direction_1 = ...
+        mod(plaid_directions - half_sep, 360);
+
+    component_direction_2 = ...
+        mod(plaid_directions + half_sep, 360);
 
     pattern_prediction = nan(nUnit, nPdir);
     component_prediction = nan(nUnit, nPdir);
+
+    component_raw_response_1 = nan(nUnit, nPdir);
+    component_raw_response_2 = nan(nUnit, nPdir);
+
+    component_baseline_1 = nan(nUnit, nPdir);
+    component_baseline_2 = nan(nUnit, nPdir);
+
+    component_evoked_response_1 = nan(nUnit, nPdir);
+    component_evoked_response_2 = nan(nUnit, nPdir);
+
+    component_baseline_addback = nan(nUnit, nPdir);
 
     pattern_grating_index = nan(1, nPdir);
     component1_grating_index = nan(1, nPdir);
@@ -1146,39 +1811,79 @@ function out = compute_pattern_component_analysis( ...
     % Strictly require every direction used by P(theta) and C(theta) to
     % have been measured in the grating run. No interpolation is allowed.
     for d = 1:nPdir
-        pattern_idx = require_unique_direction_index( ...
-            grating_directions, plaid_directions(d), ...
-            sprintf('pattern prediction for plaid direction %.12g deg', ...
+        pattern_idx = ...
+            require_unique_direction_index( ...
+            grating_directions, ...
+            plaid_directions(d), ...
+            sprintf( ...
+            'pattern prediction for plaid direction %.12g deg', ...
             plaid_directions(d)));
 
-        comp1_idx = require_unique_direction_index( ...
-            grating_directions, component_direction_1(d), ...
-            sprintf(['component prediction for plaid direction %.12g deg ' ...
-            '(theta - alpha/2)'], plaid_directions(d)));
+        comp1_idx = ...
+            require_unique_direction_index( ...
+            grating_directions, ...
+            component_direction_1(d), ...
+            sprintf([ ...
+            'component prediction for plaid direction %.12g deg ' ...
+            '(theta - alpha/2)'], ...
+            plaid_directions(d)));
 
-        comp2_idx = require_unique_direction_index( ...
-            grating_directions, component_direction_2(d), ...
-            sprintf(['component prediction for plaid direction %.12g deg ' ...
-            '(theta + alpha/2)'], plaid_directions(d)));
+        comp2_idx = ...
+            require_unique_direction_index( ...
+            grating_directions, ...
+            component_direction_2(d), ...
+            sprintf([ ...
+            'component prediction for plaid direction %.12g deg ' ...
+            '(theta + alpha/2)'], ...
+            plaid_directions(d)));
 
         pattern_grating_index(d) = pattern_idx;
         component1_grating_index(d) = comp1_idx;
         component2_grating_index(d) = comp2_idx;
 
-        pattern_prediction(:, d) = grating_mean_fr(:, pattern_idx);
-        component_prediction(:, d) = ...
-            grating_mean_fr(:, comp1_idx) + ...
-            grating_mean_fr(:, comp2_idx);
+        pattern_prediction(:, d) = ...
+            grating_mean_fr(:, pattern_idx);
+
+        G1 = grating_mean_fr(:, comp1_idx);
+        G2 = grating_mean_fr(:, comp2_idx);
+
+        component_raw_response_1(:, d) = G1;
+        component_raw_response_2(:, d) = G2;
+
+        if subtract_spontaneous
+            B1 = grating_baseline_mean_fr(:, comp1_idx);
+            B2 = grating_baseline_mean_fr(:, comp2_idx);
+
+            addback = (B1 + B2) / 2;
+
+            component_baseline_1(:, d) = B1;
+            component_baseline_2(:, d) = B2;
+
+            component_evoked_response_1(:, d) = G1 - B1;
+            component_evoked_response_2(:, d) = G2 - B2;
+
+            component_baseline_addback(:, d) = addback;
+
+            component_prediction(:, d) = ...
+                (G1 - B1) + ...
+                (G2 - B2) + ...
+                addback;
+        else
+            component_prediction(:, d) = G1 + G2;
+        end
     end
 
     rp = nan(nUnit, 1);
     rc = nan(nUnit, 1);
     rpc = nan(nUnit, 1);
+
     Rp = nan(nUnit, 1);
     Rc = nan(nUnit, 1);
+
     Zp = nan(nUnit, 1);
     Zc = nan(nUnit, 1);
     PI = nan(nUnit, 1);
+
     n_valid_directions = zeros(nUnit, 1);
     partial_corr_valid = false(nUnit, 1);
     fisher_z_clipped = false(nUnit, 1);
@@ -1189,6 +1894,7 @@ function out = compute_pattern_component_analysis( ...
         C = component_prediction(u, :);
 
         valid = isfinite(D) & isfinite(P) & isfinite(C);
+
         nValid = sum(valid);
         n_valid_directions(u) = nValid;
 
@@ -1208,47 +1914,72 @@ function out = compute_pattern_component_analysis( ...
             continue;
         end
 
-        denom_p = (1 - rc(u)^2) * (1 - rpc(u)^2);
-        denom_c = (1 - rp(u)^2) * (1 - rpc(u)^2);
+        denom_p = ...
+            (1 - rc(u)^2) * ...
+            (1 - rpc(u)^2);
+
+        denom_c = ...
+            (1 - rp(u)^2) * ...
+            (1 - rpc(u)^2);
 
         if denom_p <= 0 || denom_c <= 0
             continue;
         end
 
-        Rp(u) = (rp(u) - rc(u) * rpc(u)) / sqrt(denom_p);
-        Rc(u) = (rc(u) - rp(u) * rpc(u)) / sqrt(denom_c);
+        Rp(u) = ...
+            (rp(u) - rc(u) * rpc(u)) / ...
+            sqrt(denom_p);
+
+        Rc(u) = ...
+            (rc(u) - rp(u) * rpc(u)) / ...
+            sqrt(denom_c);
 
         % Remove tiny numerical excursions outside the correlation range.
         Rp(u) = min(max(Rp(u), -1), 1);
         Rc(u) = min(max(Rc(u), -1), 1);
+
         partial_corr_valid(u) = true;
 
         % atanh is infinite at exactly +/-1. Clip only for the Fisher-Z
         % calculation so a numerically perfect fit remains plottable.
         clip_eps = 1e-12;
-        Rp_for_z = min(max(Rp(u), -1 + clip_eps), 1 - clip_eps);
-        Rc_for_z = min(max(Rc(u), -1 + clip_eps), 1 - clip_eps);
+
+        Rp_for_z = ...
+            min(max(Rp(u), -1 + clip_eps), 1 - clip_eps);
+
+        Rc_for_z = ...
+            min(max(Rc(u), -1 + clip_eps), 1 - clip_eps);
+
         fisher_z_clipped(u) = ...
-            (Rp_for_z ~= Rp(u)) || (Rc_for_z ~= Rc(u));
+            (Rp_for_z ~= Rp(u)) || ...
+            (Rc_for_z ~= Rc(u));
 
         z_scale = sqrt(nValid - 3);
+
         Zp(u) = atanh(Rp_for_z) * z_scale;
         Zc(u) = atanh(Rc_for_z) * z_scale;
         PI(u) = Zp(u) - Zc(u);
     end
 
-    valid_classification = isfinite(Zp) & isfinite(Zc) & isfinite(PI);
+    valid_classification = ...
+        isfinite(Zp) & ...
+        isfinite(Zc) & ...
+        isfinite(PI);
 
-    is_pattern = valid_classification & ...
+    is_pattern = ...
+        valid_classification & ...
         (Zp > z_threshold) & ...
         ((Zp - Zc) > z_threshold);
 
-    is_component = valid_classification & ...
+    is_component = ...
+        valid_classification & ...
         (Zc > z_threshold) & ...
         ((Zc - Zp) > z_threshold);
 
-    is_unclassified = valid_classification & ...
-        ~is_pattern & ~is_component;
+    is_unclassified = ...
+        valid_classification & ...
+        ~is_pattern & ...
+        ~is_component;
 
     is_invalid = ~valid_classification;
 
@@ -1261,10 +1992,18 @@ function out = compute_pattern_component_analysis( ...
     out = struct();
 
     out.actual_response = plaid_mean_fr;
-    out.pattern_prediction = pattern_prediction;
-    out.component_prediction = component_prediction;
+    out.actual_response_is_raw = true;
 
-    out.component_separation_deg = component_separation_deg;
+    out.pattern_prediction = pattern_prediction;
+    out.pattern_prediction_is_raw = true;
+
+    out.component_prediction = component_prediction;
+    out.component_prediction_uses_baseline = ...
+        subtract_spontaneous;
+
+    out.component_separation_deg = ...
+        component_separation_deg;
+
     out.half_component_separation_deg = half_sep;
     out.interpolation_used = false;
     out.n_total_directions = nPdir;
@@ -1275,6 +2014,21 @@ function out = compute_pattern_component_analysis( ...
     out.pattern_grating_index = pattern_grating_index;
     out.component1_grating_index = component1_grating_index;
     out.component2_grating_index = component2_grating_index;
+
+    out.component_raw_response_1 = component_raw_response_1;
+    out.component_raw_response_2 = component_raw_response_2;
+
+    out.component_baseline_1 = component_baseline_1;
+    out.component_baseline_2 = component_baseline_2;
+
+    out.component_evoked_response_1 = ...
+        component_evoked_response_1;
+
+    out.component_evoked_response_2 = ...
+        component_evoked_response_2;
+
+    out.component_baseline_addback = ...
+        component_baseline_addback;
 
     out.rp = rp;
     out.rc = rc;
@@ -1546,12 +2300,32 @@ end
 
 function fig = plot_di_osi_distributions( ...
         DI, OSI, bin_edges, bar_width, ...
-        group_name, visibility)
+        group_name, visibility, baseline_subtracted)
 % Plot DI and OSI probability distributions in a two-row figure.
 % Bars are gray, separated, and outlined in black.
+%
+% In spontaneous-subtracted mode, regular DI bins cover 0 to 1.6.
+% Every finite DI value greater than 1.6 is combined into one overflow bar
+% labeled >1.6. Mean and median are calculated from all finite values,
+% including the values represented by the overflow bar.
+%
+% Mean is marked by a solid vertical line. Median is marked by a dashed
+% vertical line. Their numerical values are printed in each panel.
+
+    DI = double(DI(:));
+    OSI = double(OSI(:));
 
     DI = DI(isfinite(DI));
     OSI = OSI(isfinite(OSI));
+
+    baseline_subtracted = logical(baseline_subtracted);
+    bin_edges = double(bin_edges(:)');
+
+    if numel(bin_edges) < 2 || ...
+            any(~isfinite(bin_edges)) || ...
+            any(diff(bin_edges) <= 0)
+        error('bin_edges must be a strictly increasing finite vector.');
+    end
 
     fig = figure( ...
         'Color', 'w', ...
@@ -1564,15 +2338,44 @@ function fig = plot_di_osi_distributions( ...
         'TileSpacing', 'compact', ...
         'Padding', 'compact');
 
+    %% DI distribution
     ax1 = nexttile(tl, 1);
 
-    plot_probability_bars( ...
-        ax1, ...
-        DI, ...
-        bin_edges, ...
-        bar_width);
+    if baseline_subtracted
+        di_regular_max = 1.6;
 
-    xlim(ax1, [bin_edges(1), bin_edges(end)]);
+        [di_overflow_center, di_display_right] = ...
+            plot_probability_bars_with_upper_overflow( ...
+            ax1, ...
+            DI, ...
+            bin_edges, ...
+            bar_width, ...
+            di_regular_max);
+
+        add_mean_median_markers( ...
+            ax1, ...
+            DI, ...
+            0, ...
+            di_display_right, ...
+            di_regular_max, ...
+            di_overflow_center);
+    else
+        plot_probability_bars( ...
+            ax1, ...
+            DI, ...
+            bin_edges, ...
+            bar_width);
+
+        xlim(ax1, [bin_edges(1), bin_edges(end)]);
+
+        add_mean_median_markers( ...
+            ax1, ...
+            DI, ...
+            bin_edges(1), ...
+            bin_edges(end), ...
+            [], ...
+            []);
+    end
 
     xlabel(ax1, 'Direction index (DI)');
     ylabel(ax1, 'Proportion of cells');
@@ -1583,6 +2386,7 @@ function fig = plot_di_osi_distributions( ...
 
     box(ax1, 'off');
 
+    %% OSI distribution
     ax2 = nexttile(tl, 2);
 
     plot_probability_bars( ...
@@ -1592,6 +2396,14 @@ function fig = plot_di_osi_distributions( ...
         bar_width);
 
     xlim(ax2, [bin_edges(1), bin_edges(end)]);
+
+    add_mean_median_markers( ...
+        ax2, ...
+        OSI, ...
+        bin_edges(1), ...
+        bin_edges(end), ...
+        [], ...
+        []);
 
     xlabel(ax2, 'Orientation selectivity index (OSI)');
     ylabel(ax2, 'Proportion of cells');
@@ -1606,6 +2418,171 @@ function fig = plot_di_osi_distributions( ...
         tl, ...
         sprintf('%s grating selectivity', group_name), ...
         'Interpreter', 'none');
+end
+
+function [overflow_center, display_right] = ...
+        plot_probability_bars_with_upper_overflow( ...
+        ax, values, base_bin_edges, bar_width, upper_limit)
+% Plot regular probability bars through upper_limit and one overflow bar.
+%
+% The overflow bar is separated from the regular bins and represents all
+% finite values strictly greater than upper_limit.
+
+    values = double(values(:));
+    values = values(isfinite(values));
+
+    base_bin_edges = double(base_bin_edges(:)');
+    bin_widths = diff(base_bin_edges);
+    bin_width = median(bin_widths);
+
+    if ~isfinite(bin_width) || bin_width <= 0 || ...
+            any(abs(bin_widths - bin_width) > 1e-10)
+        error(['base_bin_edges must have a constant positive spacing for ' ...
+            'the DI overflow histogram.']);
+    end
+
+    if abs(base_bin_edges(1)) > 1e-10
+        error('DI overflow histogram requires base_bin_edges to begin at 0.');
+    end
+
+    n_regular_bins_float = upper_limit / bin_width;
+    n_regular_bins = round(n_regular_bins_float);
+
+    if abs(n_regular_bins_float - n_regular_bins) > 1e-10
+        error(['DI upper limit %.12g is not an integer multiple of the ' ...
+            'histogram bin width %.12g.'], upper_limit, bin_width);
+    end
+
+    regular_edges = (0:n_regular_bins) * bin_width;
+    regular_edges(end) = upper_limit;
+    regular_centers = ...
+        (regular_edges(1:end-1) + regular_edges(2:end)) / 2;
+
+    regular_counts = histcounts(values, regular_edges);
+
+    % DI should not be negative because Ropt is the maximal response, but
+    % include any unexpected negative finite values in the first bar so the
+    % displayed probabilities still sum to one.
+    regular_counts(1) = regular_counts(1) + sum(values < regular_edges(1));
+
+    overflow_count = sum(values > upper_limit);
+
+    if isempty(values)
+        regular_probability = zeros(size(regular_counts));
+        overflow_probability = 0;
+    else
+        regular_probability = regular_counts / numel(values);
+        overflow_probability = overflow_count / numel(values);
+    end
+
+    hold(ax, 'on');
+
+    % Leave one empty-bin-width gap before the overflow category.
+    overflow_center = upper_limit + 1.5 * bin_width;
+
+    all_centers = [regular_centers, overflow_center];
+    all_probability = [regular_probability, overflow_probability];
+
+    bar( ...
+        ax, ...
+        all_centers, ...
+        all_probability, ...
+        bar_width, ...
+        'FaceColor', [0.55 0.55 0.55], ...
+        'EdgeColor', [0 0 0], ...
+        'LineWidth', 0.8);
+
+    display_right = overflow_center + 0.6 * bin_width;
+    xlim(ax, [0, display_right]);
+
+    numeric_ticks = [0, 0.4, 0.8, 1.2, upper_limit];
+    numeric_ticks = numeric_ticks( ...
+        numeric_ticks >= 0 & numeric_ticks <= upper_limit);
+
+    tick_values = [numeric_ticks, overflow_center];
+    tick_labels = arrayfun( ...
+        @(x) sprintf('%g', x), ...
+        numeric_ticks, ...
+        'UniformOutput', false);
+
+    tick_labels{end + 1} = sprintf('>%g', upper_limit);
+
+    set( ...
+        ax, ...
+        'XTick', tick_values, ...
+        'XTickLabel', tick_labels);
+end
+
+function add_mean_median_markers( ...
+        ax, values, display_left, display_right, ...
+        overflow_limit, overflow_center)
+% Mark and print the mean and median of all finite values.
+%
+% For an overflow histogram, a center value above overflow_limit is drawn
+% at overflow_center, while the text reports its true untruncated value.
+
+    values = double(values(:));
+    values = values(isfinite(values));
+
+    if isempty(values)
+        return;
+    end
+
+    mean_value = mean(values);
+    median_value = median(values);
+
+    mean_plot_x = center_value_to_display_position( ...
+        mean_value, display_left, display_right, ...
+        overflow_limit, overflow_center);
+
+    median_plot_x = center_value_to_display_position( ...
+        median_value, display_left, display_right, ...
+        overflow_limit, overflow_center);
+
+    xline( ...
+        ax, ...
+        mean_plot_x, ...
+        '-', ...
+        'Color', [0 0 0], ...
+        'LineWidth', 1.3, ...
+        'HandleVisibility', 'off');
+
+    xline( ...
+        ax, ...
+        median_plot_x, ...
+        '--', ...
+        'Color', [0 0 0], ...
+        'LineWidth', 1.3, ...
+        'HandleVisibility', 'off');
+
+    text( ...
+        ax, ...
+        0.98, ...
+        0.96, ...
+        sprintf(['Mean = %.3f (solid)\n' ...
+                 'Median = %.3f (dashed)'], ...
+                 mean_value, median_value), ...
+        'Units', 'normalized', ...
+        'HorizontalAlignment', 'right', ...
+        'VerticalAlignment', 'top', ...
+        'FontSize', 10, ...
+        'Interpreter', 'none');
+end
+
+function x_display = center_value_to_display_position( ...
+        x_value, display_left, display_right, ...
+        overflow_limit, overflow_center)
+% Map a mean/median value to its visible x position.
+
+    if ~isempty(overflow_limit) && ...
+            ~isempty(overflow_center) && ...
+            x_value > overflow_limit
+
+        x_display = overflow_center;
+        return;
+    end
+
+    x_display = min(max(x_value, display_left), display_right);
 end
 
 function fig = plot_pattern_component_analysis( ...
