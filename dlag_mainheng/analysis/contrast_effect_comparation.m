@@ -179,10 +179,10 @@ baseline_fields = {'yRecon_use_all'};
 
 % Compared fields used on y-axis.
 comparation_fields = { ...
-    'yRecon_use_across', ...
-    'yRecon_across_excl_within', ...
-    'yRecon_use_within', ...
-    'yRecon_within_excl_across'};
+'yRecon_use_within_model_ts_v0_v120',...
+'yRecon_use_within_model_ts_v120_v300',...
+'yRecon_use_within_model_ts_v300_inf'};
+
 
 % Metrics to compare.
 %
@@ -207,7 +207,7 @@ group_names = {};
 save_fig = true;
 save_png = true;
 save_matlab_fig = true;
-close_after_save = false;
+close_after_save = true;
 
 % Summary save option.
 save_comparison_summary = true;
@@ -2184,6 +2184,7 @@ end
 end
 
 function [nRows, nCols] = choose_panel_layout_local(nPanels, max_panel_cols)
+
 if nPanels < 1
     error('nPanels must be >= 1.');
 end
@@ -2192,37 +2193,12 @@ if nargin < 2 || isempty(max_panel_cols)
     max_panel_cols = 4;
 end
 
-max_panel_cols = max(1, max_panel_cols);
-max_panel_cols = min(max_panel_cols, nPanels);
+max_panel_cols = max(1, round(max_panel_cols));
 
-best_score = inf;
-best_rows = 1;
-best_cols = 1;
+% Fill columns first, then add additional rows only when necessary.
+nCols = min(nPanels, max_panel_cols);
+nRows = ceil(nPanels / nCols);
 
-for c = 1:max_panel_cols
-    r = ceil(nPanels / c);
-    empty_panels = r * c - nPanels;
-
-    % Prefer layouts close to square, but slightly wider than tall.
-    aspect_penalty = abs(c / r - 1.35);
-
-    % Strongly penalize empty panels.
-    empty_penalty = empty_panels * 10;
-
-    % Mildly penalize too many rows.
-    row_penalty = r * 0.1;
-
-    score = empty_penalty + aspect_penalty + row_penalty;
-
-    if score < best_score
-        best_score = score;
-        best_rows = r;
-        best_cols = c;
-    end
-end
-
-nRows = best_rows;
-nCols = best_cols;
 end
 
 function mode_tag = model_mode_to_file_tag_local(model_mode)
