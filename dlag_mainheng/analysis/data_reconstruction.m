@@ -67,10 +67,10 @@
 % if add_timescale_directional_reconstruction = true
 % -------------------------------------------------------------------------
 % Examples:
-% seqEst(n).yRecon_use_ff_model_ts_0_120
-% seqEst(n).yRecon_use_fb_model_ts_0_120
-% seqEst(n).yRecon_use_ff_psd_ts_0_120
-% seqEst(n).yRecon_use_fb_psd_ts_0_120
+% seqEst(n).yRecon_use_ff_model_ts_v0_v120
+% seqEst(n).yRecon_use_fb_model_ts_v0_v120
+% seqEst(n).yRecon_use_ff_psd_ts_v0_v120
+% seqEst(n).yRecon_use_fb_psd_ts_v0_v120
 %
 % These are use-style reconstructions:
 %   d + selected FF or FB latent contribution
@@ -79,6 +79,25 @@
 %
 % The corresponding selected across-latent indices are saved in:
 %   timescale_recon_info.(fieldName).selected_across_idx
+%
+% -------------------------------------------------------------------------
+% Across / within + timescale reconstruction fields,
+% if add_timescale_within_across_reconstruction = true
+% -------------------------------------------------------------------------
+% Examples:
+% seqEst(n).yRecon_use_across_model_ts_v0_v120
+% seqEst(n).yRecon_use_within_model_ts_v0_v120
+% seqEst(n).yRecon_use_across_psd_ts_v0_v120
+% seqEst(n).yRecon_use_within_psd_ts_v0_v120
+%
+% These are use-style reconstructions:
+%   d + selected across or within latent contribution
+%
+% Empty selections are saved as d-only numeric fields.
+%
+% The corresponding selected indices are saved in:
+%   timescale_recon_info.(fieldName).selected_across_idx
+%   timescale_recon_info.(fieldName).selected_within_idx_by_group
 %
 % -------------------------------------------------------------------------
 % R2 output
@@ -118,7 +137,8 @@ add_keep_resid_reconstruction = false;
 
 add_directional_reconstruction = false;
 
-add_timescale_directional_reconstruction = true;
+add_timescale_directional_reconstruction = false;
+add_timescale_within_across_reconstruction = true;
 
 % If false, existing seqEst fields will not be overwritten.
 % Empty fields will still be filled.
@@ -129,10 +149,10 @@ use_fixed_noise_seed = false;
 noise_seed = 1;
 
 %% ------------------------------------------------------------------------
-% Directional + timescale reconstruction settings
+% Timescale reconstruction settings
 % -------------------------------------------------------------------------
 
-timescale_recon_sources = {'model-timescale', 'psd-timescale'};
+timescale_recon_sources = {'model-timescale'};
 % options:
 % {'model-timescale'}
 % {'psd-timescale'}
@@ -174,6 +194,7 @@ opts.add_R_noise_reconstruction = add_R_noise_reconstruction;
 opts.add_keep_resid_reconstruction = add_keep_resid_reconstruction;
 opts.add_directional_reconstruction = add_directional_reconstruction;
 opts.add_timescale_directional_reconstruction = add_timescale_directional_reconstruction;
+opts.add_timescale_within_across_reconstruction = add_timescale_within_across_reconstruction;
 opts.overwrite_existing_recon_fields = overwrite_existing_recon_fields;
 opts.timescale_recon_specs = [];
 
@@ -240,12 +261,22 @@ for cond_i = 1:numConditions
         opts.add_directional_reconstruction || ...
         opts.add_timescale_directional_reconstruction;
 
+    needAnyTimescaleRecon = ...
+        opts.add_timescale_directional_reconstruction || ...
+        opts.add_timescale_within_across_reconstruction;
+
+    needGpParams = ...
+        needDirectionalClass || ...
+        (needAnyTimescaleRecon && hasTimescaleSourceLocal(timescale_recon_sources, 'model-timescale'));
+
     latentClass = [];
     gp_params = [];
 
-    if needDirectionalClass
+    if needGpParams
         gp_params = getGpParamsLocal(Sbest, bestFile);
+    end
 
+    if needDirectionalClass
         bootstrapFile = findOneFileLocal(tempfname, 'bootstrapResults*', true);
         fprintf('Loading bootstrap ambiguity file: %s\n', bootstrapFile);
 
@@ -261,14 +292,33 @@ for cond_i = 1:numConditions
         printLatentClassificationLocal(latentClass);
     end
 
-    if opts.add_timescale_directional_reconstruction
-        timescale_recon_specs = buildTimescaleDirectionalSpecsLocal( ...
-            params, ...
-            latentClass, ...
-            gp_params, ...
-            tempfname, ...
-            timescale_recon_sources, ...
-            timescale_ranges_ms);
+    if needAnyTimescaleRecon
+        timescale_recon_specs = struct([]);
+
+        if opts.add_timescale_directional_reconstruction
+            timescale_directional_specs = buildTimescaleDirectionalSpecsLocal( ...
+                params, ...
+                latentClass, ...
+                gp_params, ...
+                tempfname, ...
+                timescale_recon_sources, ...
+                timescale_ranges_ms);
+
+            timescale_recon_specs = appendStructArrayLocal( ...
+                timescale_recon_specs, timescale_directional_specs);
+        end
+
+        if opts.add_timescale_within_across_reconstruction
+            timescale_within_across_specs = buildTimescaleWithinAcrossSpecsLocal( ...
+                params, ...
+                gp_params, ...
+                tempfname, ...
+                timescale_recon_sources, ...
+                timescale_ranges_ms);
+
+            timescale_recon_specs = appendStructArrayLocal( ...
+                timescale_recon_specs, timescale_within_across_specs);
+        end
 
         opts.timescale_recon_specs = timescale_recon_specs;
 
@@ -281,15 +331,16 @@ for cond_i = 1:numConditions
             timescale_recon_info = timescale_recon_info_new;
         end
 
-        fprintf('Timescale-directional reconstruction fields to add:\n');
+        fprintf('Timescale reconstruction fields to add:\n');
 
         for s = 1:numel(timescale_recon_specs)
-            fprintf('  %s: selected_across_idx = %s\n', ...
+            fprintf('  %s: %s\n', ...
                 timescale_recon_specs(s).fieldName, ...
-                mat2str(timescale_recon_specs(s).selected_across_idx));
+                formatTimescaleSpecSelectionLocal(timescale_recon_specs(s)));
         end
     else
         opts.timescale_recon_specs = [];
+
         if isfield(Sbest, 'timescale_recon_info') && isstruct(Sbest.timescale_recon_info)
             timescale_recon_info = Sbest.timescale_recon_info;
         else
@@ -311,7 +362,7 @@ for cond_i = 1:numConditions
 
     Sbest.seqEst = seqEst;
 
-    if opts.add_timescale_directional_reconstruction || ~isempty(fieldnames(timescale_recon_info))
+    if needAnyTimescaleRecon || ~isempty(fieldnames(timescale_recon_info))
         Sbest.timescale_recon_info = timescale_recon_info;
     end
 
@@ -375,8 +426,12 @@ end
 blocks = precomputeReconstructionBlocksLocal( ...
     params, latentClass, opts.add_directional_reconstruction);
 
-if opts.add_timescale_directional_reconstruction
-    timescaleBlocks = precomputeTimescaleDirectionalBlocksLocal( ...
+needTimescaleRecon = ...
+    opts.add_timescale_directional_reconstruction || ...
+    opts.add_timescale_within_across_reconstruction;
+
+if needTimescaleRecon
+    timescaleBlocks = precomputeTimescaleBlocksLocal( ...
         params, opts.timescale_recon_specs);
 else
     timescaleBlocks = [];
@@ -447,7 +502,7 @@ for n = 1:numel(seqEst)
         yRecon_feedforward_excl_fb_ambiguous = yBase;
     end
 
-    if opts.add_timescale_directional_reconstruction
+    if needTimescaleRecon
         nTsSpecs = numel(opts.timescale_recon_specs);
         yRecon_timescale = cell(1, nTsSpecs);
 
@@ -565,7 +620,7 @@ for n = 1:numel(seqEst)
                 d_g + Y_feedforward_excl_fb_ambiguous;
         end
 
-        if opts.add_timescale_directional_reconstruction
+        if needTimescaleRecon
             for s = 1:numel(opts.timescale_recon_specs)
                 X_selected = seqEst(n).xsm(timescaleBlocks(s, groupIdx).latIdx_selected, :);
 
@@ -673,7 +728,7 @@ for n = 1:numel(seqEst)
             yRecon_feedforward_excl_fb_ambiguous, opts.overwrite_existing_recon_fields);
     end
 
-    if opts.add_timescale_directional_reconstruction
+    if needTimescaleRecon
         for s = 1:numel(opts.timescale_recon_specs)
             fieldName = opts.timescale_recon_specs(s).fieldName;
 
@@ -836,7 +891,7 @@ for groupIdx = 1:numGroups
 end
 end
 
-function timescaleBlocks = precomputeTimescaleDirectionalBlocksLocal(params, timescaleSpecs)
+function timescaleBlocks = precomputeTimescaleBlocksLocal(params, timescaleSpecs)
 
 yDims = params.yDims;
 xDim_across = params.xDim_across;
@@ -865,18 +920,45 @@ timescaleBlocks = repmat(struct( ...
     'TT_selected', []), nSpecs, numGroups);
 
 for s = 1:nSpecs
-    selectedAcrossIdx = timescaleSpecs(s).selected_across_idx(:)';
-
-    if any(selectedAcrossIdx < 1 | selectedAcrossIdx > xDim_across)
-        error('Selected across indices are outside 1:xDim_across for field %s.', ...
-            timescaleSpecs(s).fieldName);
-    end
+    kind = char(timescaleSpecs(s).recon_kind);
 
     for groupIdx = 1:numGroups
         obsIdx = obsStart(groupIdx):obsEnd(groupIdx);
         latIdx = latStart(groupIdx):latEnd(groupIdx);
 
-        latIdx_selected = latIdx(selectedAcrossIdx);
+        switch kind
+            case {'ff', 'fb', 'across'}
+                selectedAcrossIdx = timescaleSpecs(s).selected_across_idx(:)';
+
+                if any(selectedAcrossIdx < 1 | selectedAcrossIdx > xDim_across)
+                    error('Selected across indices are outside 1:xDim_across for field %s.', ...
+                        timescaleSpecs(s).fieldName);
+                end
+
+                selectedLocalIdx = selectedAcrossIdx;
+
+            case 'within'
+                if ~isfield(timescaleSpecs(s), 'selected_within_idx_by_group') || ...
+                        numel(timescaleSpecs(s).selected_within_idx_by_group) < groupIdx
+                    error('Missing selected_within_idx_by_group for field %s.', ...
+                        timescaleSpecs(s).fieldName);
+                end
+
+                selectedWithinIdx = timescaleSpecs(s).selected_within_idx_by_group{groupIdx};
+                selectedWithinIdx = selectedWithinIdx(:)';
+
+                if any(selectedWithinIdx < 1 | selectedWithinIdx > xDim_within(groupIdx))
+                    error('Selected within indices are outside 1:xDim_within(groupIdx) for field %s, group %d.', ...
+                        timescaleSpecs(s).fieldName, groupIdx);
+                end
+
+                selectedLocalIdx = xDim_across + selectedWithinIdx;
+
+            otherwise
+                error('Unknown timescale reconstruction kind: %s', kind);
+        end
+
+        latIdx_selected = latIdx(selectedLocalIdx);
         C_selected = params.C(obsIdx, latIdx_selected);
 
         [Q_selected, TT_selected] = orthogonalizeLoadingBlockLocal(C_selected);
@@ -923,16 +1005,7 @@ if any(timescaleRangesMs(:, 2) <= timescaleRangesMs(:, 1))
     error('Each timescale range must satisfy upper > lower.');
 end
 
-specs = struct( ...
-    'fieldName', {}, ...
-    'r2Name', {}, ...
-    'direction', {}, ...
-    'timescale_source', {}, ...
-    'source_tag', {}, ...
-    'range_ms', {}, ...
-    'range_tag', {}, ...
-    'timescale_across_ms', {}, ...
-    'selected_across_idx', {});
+specs = makeEmptyTimescaleSpecStructLocal();
 
 for src_i = 1:numel(timescaleSources)
     sourceName = char(timescaleSources{src_i});
@@ -960,29 +1033,129 @@ for src_i = 1:numel(timescaleSources)
 
         specs(end+1) = makeOneTimescaleSpecLocal( ...
             fieldFF, 'ff', sourceName, sourceTag, rangeMs, rangeTag, ...
-            ts_across_ms, ffSelected); %#ok<AGROW>
+            ts_across_ms, ffSelected, {}, {}); %#ok<AGROW>
 
         specs(end+1) = makeOneTimescaleSpecLocal( ...
             fieldFB, 'fb', sourceName, sourceTag, rangeMs, rangeTag, ...
-            ts_across_ms, fbSelected); %#ok<AGROW>
+            ts_across_ms, fbSelected, {}, {}); %#ok<AGROW>
     end
 end
 end
 
+function specs = buildTimescaleWithinAcrossSpecsLocal( ...
+    params, gp_params, runDir, timescaleSources, timescaleRangesMs)
+
+xDim_across = params.xDim_across;
+xDim_within = params.xDim_within;
+numGroups = numel(xDim_within);
+
+if isempty(timescaleSources)
+    specs = struct([]);
+    return;
+end
+
+if ischar(timescaleSources) || isstring(timescaleSources)
+    timescaleSources = {char(timescaleSources)};
+end
+
+if ~iscell(timescaleSources)
+    error('timescale_recon_sources must be a character vector, string, or cell array.');
+end
+
+if isempty(timescaleRangesMs) || size(timescaleRangesMs, 2) ~= 2
+    error('timescale_ranges_ms must be an N x 2 matrix.');
+end
+
+if any(~isfinite(timescaleRangesMs(:, 1)))
+    error('Lower bounds in timescale_ranges_ms must be finite.');
+end
+
+if any(timescaleRangesMs(:, 2) <= timescaleRangesMs(:, 1))
+    error('Each timescale range must satisfy upper > lower.');
+end
+
+specs = makeEmptyTimescaleSpecStructLocal();
+
+for src_i = 1:numel(timescaleSources)
+    sourceName = char(timescaleSources{src_i});
+    sourceTag = makeTimescaleSourceTagLocal(sourceName);
+
+    [ts_across_ms, ts_within_ms_by_group] = loadAcrossWithinTimescaleLocal( ...
+        sourceName, gp_params, runDir, xDim_across, xDim_within);
+
+    for r = 1:size(timescaleRangesMs, 1)
+        rangeMs = timescaleRangesMs(r, :);
+
+        lower = rangeMs(1);
+        upper = rangeMs(2);
+
+        rangeTag = makeTimescaleRangeTagLocal(rangeMs);
+
+        acrossInRange = ts_across_ms >= lower & ts_across_ms < upper;
+        acrossSelected = find(reshape(acrossInRange, 1, []));
+
+        selectedWithinByGroup = cell(1, numGroups);
+
+        for groupIdx = 1:numGroups
+            ts_within_g = ts_within_ms_by_group{groupIdx};
+            withinInRange = ts_within_g >= lower & ts_within_g < upper;
+            selectedWithinByGroup{groupIdx} = find(reshape(withinInRange, 1, []));
+        end
+
+        fieldAcross = sprintf('yRecon_use_across_%s_ts_%s', sourceTag, rangeTag);
+        fieldWithin = sprintf('yRecon_use_within_%s_ts_%s', sourceTag, rangeTag);
+
+        specs(end+1) = makeOneTimescaleSpecLocal( ...
+            fieldAcross, 'across', sourceName, sourceTag, rangeMs, rangeTag, ...
+            ts_across_ms, acrossSelected, ts_within_ms_by_group, {}); %#ok<AGROW>
+
+        specs(end+1) = makeOneTimescaleSpecLocal( ...
+            fieldWithin, 'within', sourceName, sourceTag, rangeMs, rangeTag, ...
+            ts_across_ms, [], ts_within_ms_by_group, selectedWithinByGroup); %#ok<AGROW>
+    end
+end
+end
+
+function specs = makeEmptyTimescaleSpecStructLocal()
+
+specs = struct( ...
+    'fieldName', {}, ...
+    'r2Name', {}, ...
+    'recon_kind', {}, ...
+    'timescale_source', {}, ...
+    'source_tag', {}, ...
+    'range_ms', {}, ...
+    'range_tag', {}, ...
+    'timescale_across_ms', {}, ...
+    'timescale_within_ms_by_group', {}, ...
+    'selected_across_idx', {}, ...
+    'selected_within_idx_by_group', {});
+end
+
 function spec = makeOneTimescaleSpecLocal( ...
-    fieldName, direction, sourceName, sourceTag, rangeMs, rangeTag, ...
-    tsAcrossMs, selectedAcrossIdx)
+    fieldName, reconKind, sourceName, sourceTag, rangeMs, rangeTag, ...
+    tsAcrossMs, selectedAcrossIdx, tsWithinByGroup, selectedWithinByGroup)
+
+if nargin < 9 || isempty(tsWithinByGroup)
+    tsWithinByGroup = {};
+end
+
+if nargin < 10 || isempty(selectedWithinByGroup)
+    selectedWithinByGroup = {};
+end
 
 spec = struct();
 spec.fieldName = fieldName;
 spec.r2Name = regexprep(fieldName, '^yRecon_', '');
-spec.direction = direction;
+spec.recon_kind = reconKind;
 spec.timescale_source = sourceName;
 spec.source_tag = sourceTag;
 spec.range_ms = rangeMs;
 spec.range_tag = rangeTag;
 spec.timescale_across_ms = tsAcrossMs;
+spec.timescale_within_ms_by_group = tsWithinByGroup;
 spec.selected_across_idx = selectedAcrossIdx(:)';
+spec.selected_within_idx_by_group = selectedWithinByGroup;
 end
 
 function sourceTag = makeTimescaleSourceTagLocal(sourceName)
@@ -1058,6 +1231,173 @@ if any(~isfinite(ts_across_ms))
 end
 end
 
+function [ts_across_ms, ts_within_ms_by_group] = loadAcrossWithinTimescaleLocal( ...
+    sourceName, gp_params, runDir, xDim_across, xDim_within)
+
+switch char(sourceName)
+    case 'model-timescale'
+        ts_across_ms = loadAcrossTimescaleLocal( ...
+            sourceName, gp_params, runDir, xDim_across);
+
+        ts_within_ms_by_group = loadModelWithinTimescaleLocal( ...
+            gp_params, xDim_within);
+
+    case 'psd-timescale'
+        psdFile = fullfile(runDir, 'psd_timescale_stats.mat');
+
+        if ~exist(psdFile, 'file')
+            error(['psd_timescale_stats.mat not found:\n%s\n', ...
+                   'Run compute_psd_timescale.m first, or remove psd-timescale from timescale_recon_sources.'], ...
+                   psdFile);
+        end
+
+        Spsd = load(psdFile, 'PSD_timescale');
+
+        if ~isfield(Spsd, 'PSD_timescale')
+            error('PSD_timescale variable not found in:\n%s', psdFile);
+        end
+
+        PSD_timescale = Spsd.PSD_timescale;
+
+        ts_across_ms = loadAcrossTimescaleLocal( ...
+            sourceName, gp_params, runDir, xDim_across);
+
+        ts_within_ms_by_group = loadPsdWithinTimescaleLocal( ...
+            PSD_timescale, xDim_across, xDim_within, psdFile);
+
+    otherwise
+        error('Unknown timescale source: %s', sourceName);
+end
+end
+
+function ts_within_ms_by_group = loadModelWithinTimescaleLocal(gp_params, xDim_within)
+
+if isempty(gp_params) || ~isfield(gp_params, 'tau_within')
+    error('gp_params.tau_within is required for model-timescale within reconstruction.');
+end
+
+tau_within = gp_params.tau_within;
+xDim_within = reshape(xDim_within, 1, []);
+numGroups = numel(xDim_within);
+ts_within_ms_by_group = cell(1, numGroups);
+
+if iscell(tau_within)
+    if numel(tau_within) < numGroups
+        error('gp_params.tau_within has fewer cells than number of groups.');
+    end
+
+    for groupIdx = 1:numGroups
+        vals = reshape(double(tau_within{groupIdx}), 1, []);
+
+        if numel(vals) < xDim_within(groupIdx)
+            error('gp_params.tau_within{%d} has fewer values than xDim_within(%d).', ...
+                groupIdx, groupIdx);
+        end
+
+        ts_within_ms_by_group{groupIdx} = vals(1:xDim_within(groupIdx));
+    end
+
+elseif isnumeric(tau_within)
+    vals = double(tau_within);
+
+    if isvector(vals)
+        vals = reshape(vals, 1, []);
+
+        if numel(vals) < sum(xDim_within)
+            error('gp_params.tau_within vector has fewer values than sum(xDim_within).');
+        end
+
+        startIdx = 1;
+
+        for groupIdx = 1:numGroups
+            stopIdx = startIdx + xDim_within(groupIdx) - 1;
+            ts_within_ms_by_group{groupIdx} = vals(startIdx:stopIdx);
+            startIdx = stopIdx + 1;
+        end
+
+    elseif size(vals, 1) == numGroups
+        for groupIdx = 1:numGroups
+            rowVals = vals(groupIdx, :);
+
+            if numel(rowVals) < xDim_within(groupIdx)
+                error('gp_params.tau_within row %d has fewer values than xDim_within(%d).', ...
+                    groupIdx, groupIdx);
+            end
+
+            ts_within_ms_by_group{groupIdx} = reshape(rowVals(1:xDim_within(groupIdx)), 1, []);
+        end
+
+    elseif size(vals, 2) == numGroups
+        for groupIdx = 1:numGroups
+            colVals = vals(:, groupIdx);
+
+            if numel(colVals) < xDim_within(groupIdx)
+                error('gp_params.tau_within column %d has fewer values than xDim_within(%d).', ...
+                    groupIdx, groupIdx);
+            end
+
+            ts_within_ms_by_group{groupIdx} = reshape(colVals(1:xDim_within(groupIdx)), 1, []);
+        end
+
+    else
+        error('Could not interpret numeric gp_params.tau_within.');
+    end
+else
+    error('gp_params.tau_within must be a cell array or numeric array.');
+end
+
+for groupIdx = 1:numGroups
+    if any(~isfinite(ts_within_ms_by_group{groupIdx}))
+        warning('gp_params.tau_within for group %d contains non-finite values.', groupIdx);
+    end
+end
+end
+
+function ts_within_ms_by_group = loadPsdWithinTimescaleLocal( ...
+    PSD_timescale, xDim_across, xDim_within, psdFile)
+
+xDim_within = reshape(xDim_within, 1, []);
+numGroups = numel(xDim_within);
+ts_within_ms_by_group = cell(1, numGroups);
+
+for groupIdx = 1:numGroups
+    vals = [];
+
+    if isfield(PSD_timescale, 'within') && ...
+            numel(PSD_timescale.within) >= groupIdx && ...
+            isfield(PSD_timescale.within(groupIdx), 'period_ms') && ...
+            ~isempty(PSD_timescale.within(groupIdx).period_ms)
+
+        vals = reshape(double(PSD_timescale.within(groupIdx).period_ms), 1, []);
+
+    elseif isfield(PSD_timescale, 'local') && ...
+            numel(PSD_timescale.local) >= groupIdx && ...
+            isfield(PSD_timescale.local(groupIdx), 'period_ms') && ...
+            numel(PSD_timescale.local(groupIdx).period_ms) >= xDim_across + xDim_within(groupIdx)
+
+        localVals = reshape(double(PSD_timescale.local(groupIdx).period_ms), 1, []);
+        vals = localVals((xDim_across + 1):(xDim_across + xDim_within(groupIdx)));
+    end
+
+    if isempty(vals)
+        error('Could not find PSD within period_ms for group %d in:\n%s', ...
+            groupIdx, psdFile);
+    end
+
+    if numel(vals) < xDim_within(groupIdx)
+        error('PSD within period_ms for group %d has fewer values than xDim_within(%d).', ...
+            groupIdx, groupIdx);
+    end
+
+    vals = vals(1:xDim_within(groupIdx));
+    ts_within_ms_by_group{groupIdx} = vals;
+
+    if any(~isfinite(vals))
+        warning('PSD within period_ms for group %d contains non-finite values.', groupIdx);
+    end
+end
+end
+
 function rangeTag = makeTimescaleRangeTagLocal(rangeMs)
 
 lowerTag = makeNumberTagLocal(rangeMs(1));
@@ -1096,7 +1436,16 @@ info = struct();
 
 for s = 1:numel(specs)
     fieldName = specs(s).fieldName;
-    info.(fieldName).selected_across_idx = specs(s).selected_across_idx;
+
+    if ~isempty(specs(s).selected_across_idx)
+        info.(fieldName).selected_across_idx = specs(s).selected_across_idx;
+    elseif any(strcmp(specs(s).recon_kind, {'ff', 'fb', 'across'}))
+        info.(fieldName).selected_across_idx = [];
+    end
+
+    if ~isempty(specs(s).selected_within_idx_by_group)
+        info.(fieldName).selected_within_idx_by_group = specs(s).selected_within_idx_by_group;
+    end
 end
 end
 
@@ -1109,6 +1458,30 @@ newFields = fieldnames(infoNew);
 for i = 1:numel(newFields)
     f = newFields{i};
     infoOut.(f) = infoNew.(f);
+end
+end
+
+function txt = formatTimescaleSpecSelectionLocal(spec)
+
+kind = char(spec.recon_kind);
+
+switch kind
+    case {'ff', 'fb', 'across'}
+        txt = sprintf('selected_across_idx = %s', ...
+            mat2str(spec.selected_across_idx));
+
+    case 'within'
+        parts = cell(1, numel(spec.selected_within_idx_by_group));
+
+        for groupIdx = 1:numel(spec.selected_within_idx_by_group)
+            parts{groupIdx} = sprintf('G%d=%s', groupIdx, ...
+                mat2str(spec.selected_within_idx_by_group{groupIdx}));
+        end
+
+        txt = ['selected_within_idx_by_group: ', strjoin(parts, ', ')];
+
+    otherwise
+        txt = 'unknown selection';
 end
 end
 
@@ -1375,8 +1748,11 @@ r2_specs = {
 
 if ~isempty(seqEst)
     allFields = fieldnames(seqEst);
+
     tsMask = startsWithLocal(allFields, 'yRecon_use_ff_') | ...
-             startsWithLocal(allFields, 'yRecon_use_fb_');
+             startsWithLocal(allFields, 'yRecon_use_fb_') | ...
+             startsWithLocal(allFields, 'yRecon_use_across_') | ...
+             startsWithLocal(allFields, 'yRecon_use_within_');
 
     tsFields = allFields(tsMask);
 
@@ -1678,4 +2054,38 @@ end
 [~, idx] = sort([files.datenum], 'descend');
 files = files(idx);
 fname = fullfile(parentDir, files(1).name);
+end
+
+function tf = hasTimescaleSourceLocal(timescaleSources, targetSource)
+
+if isempty(timescaleSources)
+    tf = false;
+    return;
+end
+
+if ischar(timescaleSources) || isstring(timescaleSources)
+    timescaleSources = {char(timescaleSources)};
+end
+
+tf = false;
+
+for i = 1:numel(timescaleSources)
+    if strcmp(char(timescaleSources{i}), targetSource)
+        tf = true;
+        return;
+    end
+end
+end
+
+function out = appendStructArrayLocal(out, add)
+
+if isempty(add)
+    return;
+end
+
+if isempty(out)
+    out = add;
+else
+    out = [out, add];
+end
 end
