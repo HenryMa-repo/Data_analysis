@@ -1,0 +1,1025 @@
+%% plot_GPL_class_reconstruction_R2.m
+% Plot grating/plaid reconstruction R2 after grouping neurons by the
+% spontaneous-subtracted GPL pattern/component classification.
+%
+% Run this script after:
+%   1) GPL_analysis.m with subtract_spontaneous = true
+%   2) calculate_stimtype_reconstruction_R2.m
+%
+% Four figures are generated:
+%   Group1 grating
+%   Group1 plaid
+%   Group2 grating
+%   Group2 plaid
+%
+% Each figure uses a 2 x 4 tiled layout.
+%
+% Row 1:
+%   1) x = use all,    y = use across
+%   2) x = use all,    y = use within
+%   3) x = use across, y = use within
+%   4) nine violins in this order:
+%        pattern:      all, across, within
+%        component:    all, across, within
+%        unclassified: all, across, within
+%
+% Row 2:
+%   5) x = use all,         y = use feedforward
+%   6) x = use all,         y = use feedback
+%   7) x = use feedforward, y = use feedback
+%   8) six violins in this order:
+%        pattern:      feedforward, feedback
+%        component:    feedforward, feedback
+%        unclassified: feedforward, feedback
+%
+% Plot encoding:
+%   color  = group/probe color, matching plot_reconstruction_R2.m
+%   shape  = GPL class
+%       pattern       : circle
+%       component     : square
+%       unclassified  : upward triangle
+%
+% Scatter reference lines, violin density, individual-point jitter, median
+% horizontal bars, axes, and export behavior follow plot_reconstruction_R2.m.
+%
+% Strict neuron-population checks:
+%   - GPL and reconstruction must have the same neuron count.
+%   - Unit-ID sets must be identical.
+%   - Unit-ID order must be identical.
+%   - No GPL invalid cells are allowed.
+%   - Every neuron must belong to exactly one of pattern, component, or
+%     unclassified.
+%
+% Output filename pattern:
+%   <data_content>_<model_mode>_<Group>_<stimulus>_GPLclass_R2_...
+%       ...all_across_within_ff_fb.fig/.png
+%
+% Save location:
+%   all_condition_model:
+%       ./FA_Dlag_<data_content>/mat_results/runXXX/
+%   condition_specific_models:
+%       the folder containing this script
+
+clc;
+clear;
+
+%% ------------------------------------------------------------------------
+% User parameters: reconstruction R2
+% -------------------------------------------------------------------------
+
+data_content = 'demean_count_within_trial';
+% Common options:
+%   raw_count
+%   raw_fr
+%   z_within_trial
+%   z_within_condition
+%   z_across_conditions
+%   demean_count_within_trial
+%   demean_fr_within_trial
+%   demean_pooledsd_within_condition
+
+% Must match calculate_stimtype_reconstruction_R2.m.
+% [] means all-condition model; nonempty means condition-specific models.
+data_condition = [1:16];
+% Example:
+% data_condition = 1:16;
+
+runIdx = 1;
+
+reconstruction_suffix = 'all_across_within_ff_fb';
+
+% Leave empty to use the automatically constructed R2 filename and path.
+r2_file_override = '';
+
+%% ------------------------------------------------------------------------
+% User parameters: GPL files
+% -------------------------------------------------------------------------
+
+root_folder = 'I:\np_data';
+runName = 'RafiL001p0120';
+runind = 1;
+
+% Group order must match reconstruction yDims and unit_ids_by_group.
+probes = [0, 1];
+probe_group_names = {'Group1', 'Group2'};
+
+% This analysis must use the spontaneous-subtracted GPL classification.
+gpl_mat_name = 'unit_gpl_results_sponsub.mat';
+
+%% ------------------------------------------------------------------------
+% Save and figure options
+% -------------------------------------------------------------------------
+
+save_fig = true;
+save_png = true;
+close_after_save = true;
+
+figure_visible = 'on';
+png_dpi = 300;
+marker_size = 30;
+use_marker_alpha = true;
+
+% Violin settings copied from plot_reconstruction_R2.m.
+violin_width = 0.28;
+violin_face_alpha = 0.20;
+show_violin_median = true;
+
+show_violin_points = true;
+violin_point_size = 3;
+violin_point_jitter_width = 0.08;
+violin_point_alpha = 0.35;
+
+% Same colors as plot_reconstruction_R2.m and RF_analysis.m.
+probe_colors = [
+    0.0000, 0.4470, 0.7410;
+    0.8500, 0.3250, 0.0980
+];
+
+% GPL class marker shapes.
+class_names = {'pattern', 'component', 'unclassified'};
+class_markers = {'o', 's', '^'};
+class_short_names = {'P', 'C', 'U'};
+
+%% ------------------------------------------------------------------------
+% Main setup
+% -------------------------------------------------------------------------
+
+scriptDir = fileparts(mfilename('fullpath'));
+if isempty(scriptDir)
+    scriptDir = pwd;
+end
+
+if numel(probes) ~= numel(probe_group_names)
+    error('probe_group_names must have one entry for each probe.');
+end
+if size(probe_colors, 1) < numel(probes)
+    error('probe_colors must have at least one row per probe/group.');
+end
+if numel(class_names) ~= numel(class_markers) || ...
+        numel(class_names) ~= numel(class_short_names)
+    error('Class name, marker, and short-name lists must have equal lengths.');
+end
+
+if isempty(data_condition)
+    model_mode = 'all_condition_model';
+    defaultSaveDir = sprintf('./FA_Dlag_%s/mat_results/run%03d', ...
+        data_content, runIdx);
+else
+    model_mode = 'condition_specific_models';
+    defaultSaveDir = scriptDir;
+end
+
+r2_file_name = sprintf('%s_%s_stimtype_R2_%s.mat', ...
+    data_content, model_mode, reconstruction_suffix);
+
+if isempty(r2_file_override)
+    r2File = fullfile(defaultSaveDir, r2_file_name);
+else
+    r2File = r2_file_override;
+end
+
+if ~exist(r2File, 'file')
+    error(['Stimulus-type R2 file not found: %s\nRun ' ...
+        'calculate_stimtype_reconstruction_R2.m first.'], r2File);
+end
+
+saveDir = fileparts(r2File);
+if isempty(saveDir)
+    saveDir = pwd;
+end
+
+fprintf('\n============================================================\n');
+fprintf('Plot GPL-class reconstruction R2\n');
+fprintf('data_content : %s\n', data_content);
+fprintf('model_mode   : %s\n', model_mode);
+fprintf('R2 file      : %s\n', r2File);
+fprintf('GPL MAT      : %s\n', gpl_mat_name);
+fprintf('Save folder  : %s\n', saveDir);
+fprintf('============================================================\n');
+
+%% ------------------------------------------------------------------------
+% Load and validate stimulus-type R2
+% -------------------------------------------------------------------------
+
+S = load(r2File, 'stimtype_recon_R2');
+if ~isfield(S, 'stimtype_recon_R2')
+    error('%s does not contain stimtype_recon_R2.', r2File);
+end
+
+stimtype_recon_R2 = S.stimtype_recon_R2;
+
+validateStimtypeR2TopLevelLocal( ...
+    stimtype_recon_R2, data_content, model_mode, probes);
+
+unit_ids_by_group = stimtype_recon_R2.unit_ids_by_group;
+yDims = double(stimtype_recon_R2.yDims(:)');
+numGroups = numel(yDims);
+
+%% ------------------------------------------------------------------------
+% Locate GPL files and strictly align classifications to reconstruction
+% -------------------------------------------------------------------------
+
+run_g = sprintf('%s_g%d', runName, runind);
+destDir = fullfile(root_folder, run_g);
+cat_folder = fullfile(destDir, ['catgt_' run_g]);
+
+class_info_by_group = cell(1, numGroups);
+
+for g = 1:numGroups
+    probe_id = probes(g);
+    group_name = char(probe_group_names{g});
+    modelUnitIds = double(unit_ids_by_group{g}(:));
+
+    [gplFile, gpl_results] = loadOneGplFileLocal( ...
+        cat_folder, run_g, probe_id, gpl_mat_name);
+
+    class_info_by_group{g} = validateAndExtractGplClassesLocal( ...
+        gpl_results, modelUnitIds, g, probe_id, group_name, gplFile);
+
+    fprintf('\n%s / probe %d GPL classification:\n', group_name, probe_id);
+    fprintf('  file          : %s\n', gplFile);
+    fprintf('  total neurons : %d\n', numel(modelUnitIds));
+    fprintf('  pattern       : %d\n', sum(class_info_by_group{g}.pattern));
+    fprintf('  component     : %d\n', sum(class_info_by_group{g}.component));
+    fprintf('  unclassified  : %d\n', sum(class_info_by_group{g}.unclassified));
+end
+
+%% ------------------------------------------------------------------------
+% Generate four figures
+% -------------------------------------------------------------------------
+
+stim_types = {'grating', 'plaid'};
+
+for g = 1:numGroups
+    group_name = char(probe_group_names{g});
+    thisColor = probe_colors(g, :);
+    classInfo = class_info_by_group{g};
+
+    for s = 1:numel(stim_types)
+        stim_name = stim_types{s};
+        stimResult = stimtype_recon_R2.(stim_name);
+
+        fprintf('\nPlotting %s, %s...\n', group_name, stim_name);
+
+        fig = plotOneGroupStimFigureLocal( ...
+            stimResult, g, group_name, stim_name, ...
+            data_content, model_mode, thisColor, ...
+            classInfo, class_names, class_markers, class_short_names, ...
+            marker_size, use_marker_alpha, figure_visible, ...
+            violin_width, violin_face_alpha, show_violin_median, ...
+            show_violin_points, violin_point_size, ...
+            violin_point_jitter_width, violin_point_alpha);
+
+        figBaseName = sprintf('%s_%s_%s_%s_GPLclass_R2_%s', ...
+            data_content, model_mode, group_name, stim_name, ...
+            reconstruction_suffix);
+
+        if save_fig
+            figFile = fullfile(saveDir, [figBaseName, '.fig']);
+            savefig(fig, figFile);
+            fprintf('Saved FIG: %s\n', figFile);
+        end
+
+        if save_png
+            pngFile = fullfile(saveDir, [figBaseName, '.png']);
+            savePngLocal(fig, pngFile, png_dpi);
+            fprintf('Saved PNG: %s\n', pngFile);
+        end
+
+        if close_after_save
+            close(fig);
+        end
+    end
+end
+
+fprintf('\nDone.\n');
+
+%% ========================================================================
+% Local functions
+% ========================================================================
+
+function fig = plotOneGroupStimFigureLocal( ...
+    stimResult, groupIdx, group_name, stim_name, ...
+    data_content, model_mode, thisColor, ...
+    classInfo, class_names, class_markers, class_short_names, ...
+    marker_size, use_marker_alpha, figure_visible, ...
+    violin_width, violin_face_alpha, show_violin_median, ...
+    show_violin_points, violin_point_size, ...
+    violin_point_jitter_width, violin_point_alpha)
+
+    scatterSpecs = {
+        1, 'use_all',         'use all',         'use_across',      'use across';
+        2, 'use_all',         'use all',         'use_within',      'use within';
+        3, 'use_across',      'use across',      'use_within',      'use within';
+        5, 'use_all',         'use all',         'use_feedforward', 'use feedforward';
+        6, 'use_all',         'use all',         'use_feedback',    'use feedback';
+        7, 'use_feedforward', 'use feedforward', 'use_feedback',    'use feedback'
+    };
+
+    requiredFields = unique([scatterSpecs(:, 2); scatterSpecs(:, 4)], 'stable');
+
+    vectors = struct();
+    allR2Vals = [];
+
+    for i = 1:numel(requiredFields)
+        fieldName = requiredFields{i};
+        vectors.(fieldName) = getGroupR2VectorLocal( ...
+            stimResult, fieldName, groupIdx);
+        thisVec = vectors.(fieldName);
+        allR2Vals = [allR2Vals; thisVec(:)]; %#ok<AGROW>
+    end
+
+    nNeurons = numel(vectors.use_all);
+    validateClassInfoLengthLocal(classInfo, nNeurons, group_name);
+
+    allR2Vals = allR2Vals(isfinite(allR2Vals));
+    r2LimVals = paddedLimitsLocal(allR2Vals, [-1, 1]);
+
+    fig = figure( ...
+        'Name', sprintf('%s %s GPL-class R2', group_name, stim_name), ...
+        'Color', 'w', ...
+        'Visible', figure_visible, ...
+        'Position', [100, 100, 1950, 880]);
+
+    t = tiledlayout(fig, 2, 4, ...
+        'TileSpacing', 'compact', ...
+        'Padding', 'compact');
+
+    % ---------------------------------------------------------------------
+    % Six scatter plots
+    % ---------------------------------------------------------------------
+    for p = 1:size(scatterSpecs, 1)
+        tileIdx = scatterSpecs{p, 1};
+        xField = scatterSpecs{p, 2};
+        xLabelText = scatterSpecs{p, 3};
+        yField = scatterSpecs{p, 4};
+        yLabelText = scatterSpecs{p, 5};
+
+        ax = nexttile(t, tileIdx);
+        hold(ax, 'on');
+
+        % Same diagonal and conditional zero-line logic as
+        % plot_reconstruction_R2.m.
+        plot(ax, r2LimVals, r2LimVals, 'k--', ...
+            'LineWidth', 1, ...
+            'HandleVisibility', 'off');
+
+        if r2LimVals(1) < 0 && r2LimVals(2) > 0
+            plot(ax, [0 0], r2LimVals, 'k--', ...
+                'LineWidth', 1, ...
+                'HandleVisibility', 'off');
+            plot(ax, r2LimVals, [0 0], 'k--', ...
+                'LineWidth', 1, ...
+                'HandleVisibility', 'off');
+        end
+
+        x = vectors.(xField);
+        y = vectors.(yField);
+
+        for c = 1:numel(class_names)
+            classMask = classInfo.(class_names{c});
+            valid = classMask & isfinite(x) & isfinite(y);
+
+            scatterClassLocal( ...
+                ax, x(valid), y(valid), marker_size, ...
+                class_markers{c}, thisColor, ...
+                use_marker_alpha, 0.65);
+        end
+
+        xlim(ax, r2LimVals);
+        ylim(ax, r2LimVals);
+        axis(ax, 'square');
+
+        xlabel(ax, sprintf('%s R^2', xLabelText), 'Interpreter', 'none');
+        ylabel(ax, sprintf('%s R^2', yLabelText), 'Interpreter', 'none');
+        title(ax, sprintf('%s vs %s', yLabelText, xLabelText), ...
+            'Interpreter', 'none');
+
+        cleanAxisLocal(ax);
+
+        if p == 1
+            addClassLegendLocal( ...
+                ax, class_names, class_markers, marker_size, thisColor);
+        end
+    end
+
+    % ---------------------------------------------------------------------
+    % Row 1 violin: P/C/U x all/across/within
+    % ---------------------------------------------------------------------
+    axV1 = nexttile(t, 4);
+
+    row1Fields = {'use_all', 'use_across', 'use_within'};
+    row1Short = {'all', 'across', 'within'};
+
+    plotClassR2ViolinsLocal( ...
+        axV1, vectors, classInfo, class_names, class_markers, ...
+        class_short_names, row1Fields, row1Short, thisColor, ...
+        r2LimVals, violin_width, violin_face_alpha, ...
+        show_violin_median, show_violin_points, ...
+        violin_point_size, violin_point_jitter_width, ...
+        violin_point_alpha, 'all / across / within R^2');
+
+    % ---------------------------------------------------------------------
+    % Row 2 violin: P/C/U x FF/FB
+    % ---------------------------------------------------------------------
+    axV2 = nexttile(t, 8);
+
+    row2Fields = {'use_feedforward', 'use_feedback'};
+    row2Short = {'FF', 'FB'};
+
+    plotClassR2ViolinsLocal( ...
+        axV2, vectors, classInfo, class_names, class_markers, ...
+        class_short_names, row2Fields, row2Short, thisColor, ...
+        r2LimVals, violin_width, violin_face_alpha, ...
+        show_violin_median, show_violin_points, ...
+        violin_point_size, violin_point_jitter_width, ...
+        violin_point_alpha, 'feedforward / feedback R^2');
+
+    sgtitle(t, sprintf('%s | %s | %s | %s', ...
+        data_content, model_mode, group_name, stim_name), ...
+        'Interpreter', 'none');
+end
+
+function plotClassR2ViolinsLocal( ...
+    ax, vectors, classInfo, class_names, class_markers, ...
+    class_short_names, fieldNames, fieldShortNames, thisColor, ...
+    r2LimVals, violin_width, violin_face_alpha, ...
+    show_violin_median, show_violin_points, pointSize, ...
+    pointJitterWidth, pointAlpha, plotTitle)
+
+    hold(ax, 'on');
+
+    numClasses = numel(class_names);
+    numFields = numel(fieldNames);
+    numPositions = numClasses * numFields;
+
+    if r2LimVals(1) < 0 && r2LimVals(2) > 0
+        plot(ax, [0.5, numPositions + 0.5], [0, 0], 'k--', ...
+            'LineWidth', 1, ...
+            'HandleVisibility', 'off');
+    end
+
+    xLabels = cell(1, numPositions);
+    pos = 0;
+
+    for c = 1:numClasses
+        classMask = classInfo.(class_names{c});
+
+        for f = 1:numFields
+            pos = pos + 1;
+            valsAll = vectors.(fieldNames{f});
+            vals = valsAll(classMask);
+            vals = vals(isfinite(vals));
+
+            xLabels{pos} = sprintf('%s-%s', ...
+                class_short_names{c}, fieldShortNames{f});
+
+            drawOneViolinLocal( ...
+                ax, vals, pos, violin_width, thisColor, ...
+                violin_face_alpha, show_violin_median, ...
+                show_violin_points, pointSize, pointJitterWidth, ...
+                pointAlpha, class_markers{c});
+        end
+    end
+
+    xlim(ax, [0.5, numPositions + 0.5]);
+    ylim(ax, r2LimVals);
+
+    set(ax, ...
+        'XTick', 1:numPositions, ...
+        'XTickLabel', xLabels, ...
+        'XTickLabelRotation', 35);
+
+    ylabel(ax, 'R^2', 'Interpreter', 'tex');
+    title(ax, plotTitle, 'Interpreter', 'none');
+    cleanAxisLocal(ax);
+end
+
+function drawOneViolinLocal( ...
+    ax, vals, xPos, violin_width, thisColor, violin_face_alpha, ...
+    showMedian, showPoints, pointSize, pointJitterWidth, ...
+    pointAlpha, markerShape)
+
+    vals = vals(:);
+    vals = vals(isfinite(vals));
+
+    if isempty(vals)
+        return;
+    end
+
+    % Same density-aware point jitter as plot_reconstruction_R2.m, with
+    % GPL-class marker shape added.
+    if showPoints
+        xJitter = densityAwareJitterLocal(vals, xPos, pointJitterWidth);
+
+        try
+            scatter(ax, xJitter, vals, pointSize, markerShape, ...
+                'MarkerFaceColor', thisColor, ...
+                'MarkerEdgeColor', thisColor, ...
+                'MarkerFaceAlpha', pointAlpha, ...
+                'MarkerEdgeAlpha', pointAlpha, ...
+                'HandleVisibility', 'off');
+        catch
+            scatter(ax, xJitter, vals, pointSize, markerShape, ...
+                'MarkerFaceColor', thisColor, ...
+                'MarkerEdgeColor', thisColor, ...
+                'HandleVisibility', 'off');
+        end
+    end
+
+    if numel(vals) < 2 || max(vals) == min(vals)
+        y0 = vals(1);
+        plot(ax, ...
+            [xPos - violin_width * 0.45, xPos + violin_width * 0.45], ...
+            [y0, y0], '-', ...
+            'Color', thisColor, ...
+            'LineWidth', 2, ...
+            'HandleVisibility', 'off');
+        return;
+    end
+
+    [f, xi] = estimateDensityLocal(vals);
+
+    if isempty(f) || isempty(xi) || max(f) <= 0
+        medVal = median(vals);
+        plot(ax, ...
+            [xPos - violin_width * 0.45, xPos + violin_width * 0.45], ...
+            [medVal, medVal], '-', ...
+            'Color', thisColor, ...
+            'LineWidth', 2, ...
+            'HandleVisibility', 'off');
+        return;
+    end
+
+    f = f(:)';
+    xi = xi(:)';
+    f = f ./ max(f) .* violin_width;
+
+    xPatch = [xPos - f, fliplr(xPos + f)];
+    yPatch = [xi, fliplr(xi)];
+
+    patch(ax, xPatch, yPatch, thisColor, ...
+        'FaceAlpha', violin_face_alpha, ...
+        'EdgeColor', thisColor, ...
+        'LineWidth', 1, ...
+        'HandleVisibility', 'off');
+
+    if showMedian
+        medVal = median(vals);
+        plot(ax, ...
+            [xPos - violin_width * 0.55, xPos + violin_width * 0.55], ...
+            [medVal, medVal], '-', ...
+            'Color', thisColor, ...
+            'LineWidth', 2, ...
+            'HandleVisibility', 'off');
+    end
+end
+
+function scatterClassLocal( ...
+    ax, x, y, marker_size, markerShape, thisColor, ...
+    use_marker_alpha, alphaValue)
+
+    if isempty(x)
+        return;
+    end
+
+    if use_marker_alpha
+        try
+            scatter(ax, x, y, marker_size, markerShape, ...
+                'MarkerFaceColor', thisColor, ...
+                'MarkerEdgeColor', thisColor, ...
+                'MarkerFaceAlpha', alphaValue, ...
+                'MarkerEdgeAlpha', alphaValue, ...
+                'HandleVisibility', 'off');
+            return;
+        catch
+            % Fall through for older MATLAB versions.
+        end
+    end
+
+    scatter(ax, x, y, marker_size, markerShape, ...
+        'MarkerFaceColor', thisColor, ...
+        'MarkerEdgeColor', thisColor, ...
+        'HandleVisibility', 'off');
+end
+
+function addClassLegendLocal( ...
+    ax, class_names, class_markers, marker_size, thisColor)
+    h = gobjects(1, numel(class_names));
+
+    for c = 1:numel(class_names)
+        h(c) = scatter(ax, NaN, NaN, marker_size, class_markers{c}, ...
+            'MarkerFaceColor', thisColor, ...
+            'MarkerEdgeColor', thisColor, ...
+            'DisplayName', class_names{c});
+    end
+
+    legend(ax, h, class_names, ...
+        'Location', 'best', ...
+        'Interpreter', 'none', ...
+        'Box', 'off');
+end
+
+function vec = getGroupR2VectorLocal(stimResult, fieldName, groupIdx)
+    if ~isfield(stimResult, fieldName)
+        error('Stimulus R2 result is missing field %s.', fieldName);
+    end
+    if ~isfield(stimResult.(fieldName), 'neuron_by_group')
+        error('%s is missing neuron_by_group.', fieldName);
+    end
+
+    byGroup = stimResult.(fieldName).neuron_by_group;
+    if ~iscell(byGroup) || groupIdx > numel(byGroup)
+        error('%s.neuron_by_group does not contain group %d.', ...
+            fieldName, groupIdx);
+    end
+
+    vec = double(byGroup{groupIdx}(:));
+end
+
+function validateStimtypeR2TopLevelLocal( ...
+    R, expectedDataContent, expectedModelMode, probes)
+
+    requiredTop = {
+        'data_content', 'model_mode', 'yDims', ...
+        'unit_ids_by_group', 'grating', 'plaid'
+    };
+
+    for i = 1:numel(requiredTop)
+        if ~isfield(R, requiredTop{i})
+            error('stimtype_recon_R2 is missing field %s.', requiredTop{i});
+        end
+    end
+
+    if ~strcmp(char(R.data_content), expectedDataContent)
+        error('R2 data_content is %s, but the plotting parameter is %s.', ...
+            char(R.data_content), expectedDataContent);
+    end
+
+    if ~strcmp(char(R.model_mode), expectedModelMode)
+        error('R2 model_mode is %s, but the plotting mode is %s.', ...
+            char(R.model_mode), expectedModelMode);
+    end
+
+    yDims = double(R.yDims(:)');
+    if numel(yDims) ~= numel(probes)
+        error('R2 contains %d groups, but probes contains %d entries.', ...
+            numel(yDims), numel(probes));
+    end
+
+    if ~iscell(R.unit_ids_by_group) || ...
+            numel(R.unit_ids_by_group) ~= numel(yDims)
+        error('unit_ids_by_group must contain one cell per reconstruction group.');
+    end
+
+    fields = {
+        'use_all', 'use_across', 'use_within', ...
+        'use_feedforward', 'use_feedback'
+    };
+    stimTypes = {'grating', 'plaid'};
+
+    for s = 1:numel(stimTypes)
+        stimName = stimTypes{s};
+
+        for f = 1:numel(fields)
+            fieldName = fields{f};
+
+            if ~isfield(R.(stimName), fieldName) || ...
+                    ~isfield(R.(stimName).(fieldName), 'neuron_by_group')
+                error('R2 is missing %s.%s.neuron_by_group.', ...
+                    stimName, fieldName);
+            end
+
+            byGroup = R.(stimName).(fieldName).neuron_by_group;
+            if ~iscell(byGroup) || numel(byGroup) ~= numel(yDims)
+                error('%s.%s.neuron_by_group has the wrong group count.', ...
+                    stimName, fieldName);
+            end
+
+            for g = 1:numel(yDims)
+                if numel(byGroup{g}) ~= yDims(g)
+                    error(['%s.%s group %d contains %d R2 values, but ' ...
+                        'yDims(%d) is %d.'], ...
+                        stimName, fieldName, g, numel(byGroup{g}), ...
+                        g, yDims(g));
+                end
+            end
+        end
+    end
+
+    for g = 1:numel(yDims)
+        if numel(R.unit_ids_by_group{g}) ~= yDims(g)
+            error(['unit_ids_by_group{%d} contains %d IDs, but yDims(%d) ' ...
+                'is %d.'], g, numel(R.unit_ids_by_group{g}), g, yDims(g));
+        end
+    end
+end
+
+function [gplFile, gpl_results] = loadOneGplFileLocal( ...
+    cat_folder, run_g, probe_id, gpl_mat_name)
+
+    probe_folder = fullfile(cat_folder, ...
+        sprintf('%s_imec%d', run_g, probe_id));
+
+    if ~isfolder(probe_folder)
+        error('Probe folder not found: %s', probe_folder);
+    end
+
+    d = dir(fullfile(probe_folder, 'kilosort*', gpl_mat_name));
+    d = d(~[d.isdir]);
+
+    if isempty(d)
+        error('No %s found under %s/kilosort*.', ...
+            gpl_mat_name, probe_folder);
+    end
+
+    if numel(d) > 1
+        paths = cell(1, numel(d));
+        for i = 1:numel(d)
+            paths{i} = fullfile(d(i).folder, d(i).name);
+        end
+        error(['Found multiple GPL result files for probe %d. The GPL ' ...
+            'classification source is ambiguous:\n%s'], ...
+            probe_id, strjoin(paths, '\n'));
+    end
+
+    gplFile = fullfile(d(1).folder, d(1).name);
+    S = load(gplFile, 'gpl_results');
+
+    if ~isfield(S, 'gpl_results')
+        error('%s does not contain gpl_results.', gplFile);
+    end
+
+    gpl_results = S.gpl_results;
+end
+
+function classInfo = validateAndExtractGplClassesLocal( ...
+    gpl_results, modelUnitIds, groupIdx, probe_id, group_name, gplFile)
+
+    if ~isfield(gpl_results, 'used_unit_ids')
+        error('%s is missing gpl_results.used_unit_ids.', gplFile);
+    end
+    if ~isfield(gpl_results, 'plaid')
+        error('%s is missing gpl_results.plaid.', gplFile);
+    end
+
+    if ~isfield(gpl_results, 'baseline_subtracted')
+        error('%s is missing gpl_results.baseline_subtracted.', gplFile);
+    end
+
+    baselineSubtracted = gpl_results.baseline_subtracted;
+    if ~isscalar(baselineSubtracted) || ~logical(baselineSubtracted)
+        error(['GPL file %s is not marked baseline_subtracted = true. ' ...
+            'This analysis requires unit_gpl_results_sponsub.mat.'], gplFile);
+    end
+
+    gplUnitIds = double(gpl_results.used_unit_ids(:));
+    modelUnitIds = double(modelUnitIds(:));
+
+    if numel(gplUnitIds) ~= numel(modelUnitIds)
+        error(['Neuron population mismatch for Group %d (%s, probe %d): ' ...
+            'reconstruction has %d neurons, but GPL has %d neurons. ' ...
+            'These two analyses do not correspond to the same cell population.'], ...
+            groupIdx, group_name, probe_id, ...
+            numel(modelUnitIds), numel(gplUnitIds));
+    end
+
+    if numel(unique(gplUnitIds)) ~= numel(gplUnitIds)
+        error('GPL used_unit_ids contains duplicates in %s.', gplFile);
+    end
+    if numel(unique(modelUnitIds)) ~= numel(modelUnitIds)
+        error('Reconstruction unit IDs contain duplicates for Group %d.', groupIdx);
+    end
+
+    if ~isequal(sort(gplUnitIds), sort(modelUnitIds))
+        missingFromGpl = setdiff(modelUnitIds, gplUnitIds, 'stable');
+        extraInGpl = setdiff(gplUnitIds, modelUnitIds, 'stable');
+
+        error(['Neuron ID mismatch for Group %d (%s, probe %d). ' ...
+            'The GPL and reconstruction cell populations are different. ' ...
+            'Missing from GPL: %s. Extra in GPL: %s.'], ...
+            groupIdx, group_name, probe_id, ...
+            summarizeIdsLocal(missingFromGpl), ...
+            summarizeIdsLocal(extraInGpl));
+    end
+
+    if ~isequal(gplUnitIds, modelUnitIds)
+        mismatchIdx = find(gplUnitIds ~= modelUnitIds, 1, 'first');
+        error(['Neuron order mismatch for Group %d (%s, probe %d). ' ...
+            'The ID sets are identical, but their order differs. At index ' ...
+            '%d, reconstruction ID = %g and GPL ID = %g.'], ...
+            groupIdx, group_name, probe_id, mismatchIdx, ...
+            modelUnitIds(mismatchIdx), gplUnitIds(mismatchIdx));
+    end
+
+    requiredClassFields = {
+        'is_pattern', 'is_component', 'is_unclassified', 'is_invalid'
+    };
+
+    for i = 1:numel(requiredClassFields)
+        f = requiredClassFields{i};
+        if ~isfield(gpl_results.plaid, f)
+            error('%s is missing gpl_results.plaid.%s.', gplFile, f);
+        end
+    end
+
+    isPattern = logical(gpl_results.plaid.is_pattern(:));
+    isComponent = logical(gpl_results.plaid.is_component(:));
+    isUnclassified = logical(gpl_results.plaid.is_unclassified(:));
+    isInvalid = logical(gpl_results.plaid.is_invalid(:));
+
+    masks = {isPattern, isComponent, isUnclassified, isInvalid};
+    for i = 1:numel(masks)
+        if numel(masks{i}) ~= numel(modelUnitIds)
+            error(['GPL class mask %s has %d entries, but Group %d has ' ...
+                '%d neurons.'], ...
+                requiredClassFields{i}, numel(masks{i}), ...
+                groupIdx, numel(modelUnitIds));
+        end
+    end
+
+    if any(isInvalid)
+        invalidIds = modelUnitIds(isInvalid);
+        error(['GPL classification contains %d invalid neuron(s) for ' ...
+            'Group %d (%s, probe %d). Invalid unit IDs: %s. Every neuron ' ...
+            'must be pattern, component, or unclassified before plotting.'], ...
+            numel(invalidIds), groupIdx, group_name, probe_id, ...
+            summarizeIdsLocal(invalidIds));
+    end
+
+    classCount = double(isPattern) + double(isComponent) + ...
+        double(isUnclassified);
+
+    if any(classCount ~= 1)
+        badIds = modelUnitIds(classCount ~= 1);
+        error(['GPL class masks are not mutually exclusive and exhaustive ' ...
+            'for Group %d (%s). Affected unit IDs: %s.'], ...
+            groupIdx, group_name, summarizeIdsLocal(badIds));
+    end
+
+    classInfo = struct();
+    classInfo.pattern = isPattern;
+    classInfo.component = isComponent;
+    classInfo.unclassified = isUnclassified;
+    classInfo.unit_ids = modelUnitIds;
+    classInfo.gpl_file = gplFile;
+end
+
+function validateClassInfoLengthLocal(classInfo, nNeurons, group_name)
+    fields = {'pattern', 'component', 'unclassified'};
+
+    for i = 1:numel(fields)
+        if numel(classInfo.(fields{i})) ~= nNeurons
+            error('%s class mask length does not match R2 neuron count.', ...
+                group_name);
+        end
+    end
+end
+
+function s = summarizeIdsLocal(ids)
+    ids = ids(:)';
+
+    if isempty(ids)
+        s = 'none';
+        return;
+    end
+
+    maxShow = 20;
+    if numel(ids) <= maxShow
+        s = mat2str(ids);
+    else
+        s = sprintf('%s ... (%d total)', ...
+            mat2str(ids(1:maxShow)), numel(ids));
+    end
+end
+
+function [f, xi] = estimateDensityLocal(vals)
+    vals = vals(:);
+    vals = vals(isfinite(vals));
+
+    if isempty(vals) || numel(vals) < 2 || max(vals) == min(vals)
+        f = [];
+        xi = [];
+        return;
+    end
+
+    if exist('ksdensity', 'file') == 2
+        try
+            [f, xi] = ksdensity(vals, 'NumPoints', 100);
+            return;
+        catch
+            % Fall through to histogram fallback.
+        end
+    end
+
+    numBins = min(20, max(5, round(sqrt(numel(vals)))));
+
+    try
+        [counts, edges] = histcounts(vals, numBins, 'Normalization', 'pdf');
+    catch
+        [counts, edges] = histcounts(vals, numBins);
+        binWidth = mean(diff(edges));
+        counts = counts ./ (sum(counts) * binWidth);
+    end
+
+    xi = edges(1:end-1) + diff(edges) / 2;
+    f = counts;
+
+    valid = isfinite(f) & isfinite(xi);
+    f = f(valid);
+    xi = xi(valid);
+end
+
+function xJitter = densityAwareJitterLocal(vals, xPos, maxJitterWidth)
+    vals = vals(:);
+
+    if isempty(vals)
+        xJitter = [];
+        return;
+    end
+
+    if numel(vals) < 2 || max(vals) == min(vals)
+        xJitter = xPos + zeros(size(vals));
+        return;
+    end
+
+    [f, xi] = estimateDensityLocal(vals);
+
+    if isempty(f) || isempty(xi) || max(f) <= 0
+        xJitter = xPos + (rand(size(vals)) - 0.5) * 2 * maxJitterWidth;
+        return;
+    end
+
+    f = f(:);
+    xi = xi(:);
+
+    densityAtVals = interp1(xi, f, vals, 'linear', 'extrap');
+    densityAtVals(~isfinite(densityAtVals)) = 0;
+    densityAtVals(densityAtVals < 0) = 0;
+
+    if max(densityAtVals) > 0
+        densityAtVals = densityAtVals ./ max(densityAtVals);
+    else
+        densityAtVals = ones(size(vals));
+    end
+
+    densityFloor = 0.08;
+    densityAtVals = densityFloor + ...
+        (1 - densityFloor) .* densityAtVals;
+
+    localWidth = maxJitterWidth .* densityAtVals;
+    xJitter = xPos + (rand(size(vals)) - 0.5) .* 2 .* localWidth;
+end
+
+function limVals = paddedLimitsLocal(vals, defaultLim)
+    vals = vals(:);
+    vals = vals(isfinite(vals));
+
+    if isempty(vals)
+        limVals = defaultLim;
+        return;
+    end
+
+    minVal = min(vals);
+    maxVal = max(vals);
+
+    if minVal == maxVal
+        padVal = max(0.1, abs(minVal) * 0.1);
+    else
+        padVal = 0.05 * (maxVal - minVal);
+    end
+
+    limVals = [minVal - padVal, maxVal + padVal];
+
+    if limVals(1) == limVals(2)
+        limVals = limVals + [-0.1, 0.1];
+    end
+end
+
+function cleanAxisLocal(ax)
+    grid(ax, 'off');
+    box(ax, 'off');
+
+    set(ax, ...
+        'TickDir', 'out', ...
+        'LineWidth', 1, ...
+        'FontSize', 11);
+end
+
+function savePngLocal(fig, pngFile, dpi)
+    drawnow;
+
+    try
+        if exist('exportgraphics', 'file') == 2
+            exportgraphics(fig, pngFile, ...
+                'Resolution', dpi, ...
+                'BackgroundColor', 'white');
+        else
+            set(fig, 'PaperPositionMode', 'auto');
+            print(fig, pngFile, '-dpng', sprintf('-r%d', dpi));
+        end
+    catch
+        warning('exportgraphics/print failed. Falling back to saveas.');
+        saveas(fig, pngFile);
+    end
+end
